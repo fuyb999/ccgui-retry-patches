@@ -111,3 +111,7 @@ For every new CC GUI version:
 Generated source checkouts under `work/` and artifacts under `dist/` are ignored
 by Git. Authentication files, API keys, IDEA logs, and Codex session files must
 never be added to this repository.
+
+The previously installed standalone HTTP retry proxy and its user systemd unit
+are preserved separately under `backups/codex-retry-proxy/`. They are not used
+by the source-patched plugin build.
