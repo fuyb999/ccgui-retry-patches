@@ -1,10 +1,10 @@
 ai-bridge/services/codex/codex-event-handler.js    |  11 +-
- .../services/codex/codex-event-handler.test.js     |  40 +++++
- ai-bridge/services/codex/codex-retry.js            | 159 +++++++++++++++++
- ai-bridge/services/codex/codex-retry.test.js       | 196 +++++++++++++++++++++
- ai-bridge/services/codex/message-service.js        |  65 +++++--
- .../services/codex/message-service.retry.test.js   |  78 ++++++++
- 6 files changed, 529 insertions(+), 20 deletions(-)
+ .../services/codex/codex-event-handler.test.js     |  40 ++++
+ ai-bridge/services/codex/codex-retry.js            | 168 ++++++++++++++++
+ ai-bridge/services/codex/codex-retry.test.js       | 219 +++++++++++++++++++++
+ ai-bridge/services/codex/message-service.js        |  69 +++++--
+ .../services/codex/message-service.retry.test.js   |  84 ++++++++
+ 6 files changed, 571 insertions(+), 20 deletions(-)
 
 diff --git a/ai-bridge/services/codex/codex-event-handler.js b/ai-bridge/services/codex/codex-event-handler.js
 index b519699c..b9c384c4 100644
@@ -104,10 +104,10 @@ index 5c4c9816..a1a90629 100644
    const state = createInitialEventState((message) => emittedMessages.push(message));
 diff --git a/ai-bridge/services/codex/codex-retry.js b/ai-bridge/services/codex/codex-retry.js
 new file mode 100644
-index 00000000..0dadeae5
+index 00000000..619c1dbb
 --- /dev/null
 +++ b/ai-bridge/services/codex/codex-retry.js
-@@ -0,0 +1,159 @@
+@@ -0,0 +1,168 @@
 +export const CODEX_RETRY_DELAY_MS = 30_000;
 +
 +const NETWORK_ERROR_CODES = new Set([
@@ -179,6 +179,10 @@ index 00000000..0dadeae5
 +  const combinedMessage = messages.join('\n');
 +  const bareStatus = numericStatus(combinedMessage.trim());
 +  if (bareStatus !== null) statuses.add(bareStatus);
++  for (const match of combinedMessage.matchAll(/^\s*(\d{3})(?=\s|:|$)/gm)) {
++    const status = numericStatus(match[1]);
++    if (status !== null) statuses.add(status);
++  }
 +  for (const match of combinedMessage.matchAll(/\b(?:http(?:\s+status)?|status(?:\s+code)?)[\s:=]*(\d{3})\b/gi)) {
 +    statuses.add(Number(match[1]));
 +  }
@@ -255,7 +259,12 @@ index 00000000..0dadeae5
 +    try {
 +      return await runAttempt({ turnAbortController, retryCount });
 +    } catch (error) {
-+      if (signal?.aborted || turnAbortController.signal.aborted || !isRetryableCodexError(error)) {
++      if (
++        signal?.aborted ||
++        turnAbortController.signal.aborted ||
++        state?.turnCompleted ||
++        !isRetryableCodexError(error)
++      ) {
 +        throw error;
 +      }
 +      retryCount += 1;
@@ -269,10 +278,10 @@ index 00000000..0dadeae5
 +}
 diff --git a/ai-bridge/services/codex/codex-retry.test.js b/ai-bridge/services/codex/codex-retry.test.js
 new file mode 100644
-index 00000000..2cc06ffd
+index 00000000..53b1d2e1
 --- /dev/null
 +++ b/ai-bridge/services/codex/codex-retry.test.js
-@@ -0,0 +1,196 @@
+@@ -0,0 +1,219 @@
 +import test from 'node:test';
 +import assert from 'node:assert/strict';
 +import {
@@ -295,6 +304,8 @@ index 00000000..2cc06ffd
 +    new Error('429 Too Many Requests'),
 +    new Error('429'),
 +    new Error('502'),
++    new Error('502 Bad Gateway'),
++    new Error('503 Service Unavailable'),
 +    Object.assign(new Error('fetch failed'), { code: 'ECONNRESET' }),
 +    new Error('socket closed before the response completed'),
 +    new CodexTurnFailure('stream failed', { error: { code: 'ETIMEDOUT' } }),
@@ -316,6 +327,7 @@ index 00000000..2cc06ffd
 +    );
 +  }
 +  assert.equal(isRetryableCodexError(new Error('invalid request')), false);
++  assert.equal(isRetryableCodexError(new Error('400 Bad Request')), false);
 +  assert.equal(isRetryableCodexError({ status: 404 }), false);
 +});
 +
@@ -359,7 +371,7 @@ index 00000000..2cc06ffd
 +  const delays = [];
 +  const controllers = [];
 +  const retryNotices = [];
-+  const state = { turnStarted: true, turnCompleted: true, currentThreadId: 'thread-1' };
++  const state = { turnStarted: true, turnCompleted: false, currentThreadId: 'thread-1' };
 +
 +  const result = await runCodexTurnWithRetry({
 +    state,
@@ -398,11 +410,31 @@ index 00000000..2cc06ffd
 +  }
 +});
 +
++test('does not retry a stream error after turn.completed', async () => {
++  const state = { turnCompleted: false };
++  let attempts = 0;
++  const postCompletionError = new Error('socket closed after completion');
++
++  await assert.rejects(
++    runCodexTurnWithRetry({
++      state,
++      runAttempt: async () => {
++        attempts += 1;
++        state.turnCompleted = true;
++        throw postCompletionError;
++      },
++      sleep: async () => { throw new Error('retry delay must not start'); },
++    }),
++    (error) => error === postCompletionError,
++  );
++  assert.equal(attempts, 1);
++});
++
 +test('resets attempt-local flags while preserving logical output state', async () => {
 +  const emittedToolUseIds = new Set(['tool-1']);
 +  const state = {
 +    turnStarted: true,
-+    turnCompleted: true,
++    turnCompleted: false,
 +    turnUsageBaseline: { input_tokens: 10 },
 +    latestTotalTokenUsage: { input_tokens: 20 },
 +    commandApprovalAbortRequested: false,
@@ -470,7 +502,7 @@ index 00000000..2cc06ffd
 +  assert.equal(attempts, 1);
 +});
 diff --git a/ai-bridge/services/codex/message-service.js b/ai-bridge/services/codex/message-service.js
-index 9d2967b7..2b6e801c 100644
+index 9d2967b7..f4fed219 100644
 --- a/ai-bridge/services/codex/message-service.js
 +++ b/ai-bridge/services/codex/message-service.js
 @@ -26,7 +26,8 @@ import {
@@ -483,7 +515,7 @@ index 9d2967b7..2b6e801c 100644
  } from './codex-utils.js';
  import { collectAgentsInstructions } from './codex-agents-loader.js';
  import {
-@@ -34,6 +35,37 @@ import {
+@@ -34,6 +35,41 @@ import {
    prepareSessionReplayBoundary,
    processCodexEventStream,
  } from './codex-event-handler.js';
@@ -496,6 +528,7 @@ index 9d2967b7..2b6e801c 100644
 +  config,
 +  signal,
 +  processEvents = processCodexEventStream,
++  prepareReplayBoundary = prepareSessionReplayBoundary,
 +  sleep,
 +  onStreamStart,
 +  onRetry,
@@ -506,7 +539,10 @@ index 9d2967b7..2b6e801c 100644
 +    signal,
 +    sleep,
 +    onRetry,
-+    runAttempt: async ({ turnAbortController }) => {
++    runAttempt: async ({ turnAbortController, retryCount }) => {
++      if (retryCount > 0) {
++        await prepareReplayBoundary(state, state.currentThreadId || config.threadId || null);
++      }
 +      const { events } = await thread.runStreamed(runInput, {
 +        signal: turnAbortController.signal,
 +      });
@@ -521,7 +557,7 @@ index 9d2967b7..2b6e801c 100644
  
  // ---------------------------------------------------------------------------
  // sendMessage
-@@ -260,13 +292,6 @@ export async function sendMessage(
+@@ -260,13 +296,6 @@ export async function sendMessage(
      const state = createInitialEventState(emitMessage);
      await prepareSessionReplayBoundary(state, threadId);
  
@@ -535,7 +571,7 @@ index 9d2967b7..2b6e801c 100644
      // ============================================================
      // 7. Delegate Event Processing to codex-event-handler
      // ============================================================
-@@ -276,12 +301,28 @@ export async function sendMessage(
+@@ -276,12 +305,28 @@ export async function sendMessage(
        threadId,
        threadOptions,
        normalizedPermissionMode,
@@ -570,10 +606,10 @@ index 9d2967b7..2b6e801c 100644
      // ============================================================
 diff --git a/ai-bridge/services/codex/message-service.retry.test.js b/ai-bridge/services/codex/message-service.retry.test.js
 new file mode 100644
-index 00000000..996a4d9b
+index 00000000..c419fd8a
 --- /dev/null
 +++ b/ai-bridge/services/codex/message-service.retry.test.js
-@@ -0,0 +1,78 @@
+@@ -0,0 +1,84 @@
 +import test from 'node:test';
 +import assert from 'node:assert/strict';
 +import { runCodexMessageAttempts } from './message-service.js';
@@ -583,6 +619,7 @@ index 00000000..996a4d9b
 +  const runCalls = [];
 +  const attemptControllers = [];
 +  const retryNotices = [];
++  const replayBoundaries = [];
 +  let streamStarts = 0;
 +  let streamEnds = 0;
 +  let processCalls = 0;
@@ -614,6 +651,10 @@ index 00000000..996a4d9b
 +    sleep: async (ms) => assert.equal(ms, 30_000),
 +    onStreamStart: () => { streamStarts += 1; },
 +    onRetry: (notice) => retryNotices.push(notice),
++    prepareReplayBoundary: async (receivedState, threadId) => {
++      assert.equal(receivedState, state);
++      replayBoundaries.push(threadId);
++    },
 +  });
 +
 +  assert.equal(runCalls.length, 2);
@@ -623,6 +664,7 @@ index 00000000..996a4d9b
 +  assert.equal(streamStarts, 1);
 +  assert.equal(streamEnds, 1);
 +  assert.equal(retryNotices.length, 1);
++  assert.deepEqual(replayBoundaries, ['thread-1']);
 +  assert.equal(state.currentThreadId, 'thread-1');
 +});
 +
@@ -735,7 +777,7 @@ ai-bridge/services/codex/codex-event-handler.test.js
   +40 -0
 
 ai-bridge/services/codex/codex-retry.js
-  @@ -0,0 +1,159 @@
+  @@ -0,0 +1,168 @@
   +export const CODEX_RETRY_DELAY_MS = 30_000;
   +
   +const NETWORK_ERROR_CODES = new Set([
@@ -807,6 +849,10 @@ ai-bridge/services/codex/codex-retry.js
   +  const combinedMessage = messages.join('\n');
   +  const bareStatus = numericStatus(combinedMessage.trim());
   +  if (bareStatus !== null) statuses.add(bareStatus);
+  +  for (const match of combinedMessage.matchAll(/^\s*(\d{3})(?=\s|:|$)/gm)) {
+  +    const status = numericStatus(match[1]);
+  +    if (status !== null) statuses.add(status);
+  +  }
   +  for (const match of combinedMessage.matchAll(/\b(?:http(?:\s+status)?|status(?:\s+code)?)[\s:=]*(\d{3})\b/gi)) {
   +    statuses.add(Number(match[1]));
   +  }
@@ -832,15 +878,11 @@ ai-bridge/services/codex/codex-retry.js
   +
   +export function abortableDelay(ms, signal, timers = globalThis) {
   +  if (signal?.aborted) return Promise.reject(createAbortError(signal));
-  +
-  +  return new Promise((resolve, reject) => {
-  +    let timer;
-  +    const cleanup = () => signal?.removeEventListener('abort', onAbort);
-  ... (59 lines truncated)
-  +159 -0
+  ... (68 lines truncated)
+  +168 -0
 
 ai-bridge/services/codex/codex-retry.test.js
-  @@ -0,0 +1,196 @@
+  @@ -0,0 +1,219 @@
   +import test from 'node:test';
   +import assert from 'node:assert/strict';
   +import {
@@ -863,6 +905,8 @@ ai-bridge/services/codex/codex-retry.test.js
   +    new Error('429 Too Many Requests'),
   +    new Error('429'),
   +    new Error('502'),
+  +    new Error('502 Bad Gateway'),
+  +    new Error('503 Service Unavailable'),
   +    Object.assign(new Error('fetch failed'), { code: 'ECONNRESET' }),
   +    new Error('socket closed before the response completed'),
   +    new CodexTurnFailure('stream failed', { error: { code: 'ETIMEDOUT' } }),
@@ -884,6 +928,7 @@ ai-bridge/services/codex/codex-retry.test.js
   +    );
   +  }
   +  assert.equal(isRetryableCodexError(new Error('invalid request')), false);
+  +  assert.equal(isRetryableCodexError(new Error('400 Bad Request')), false);
   +  assert.equal(isRetryableCodexError({ status: 404 }), false);
   +});
   +
@@ -927,7 +972,7 @@ ai-bridge/services/codex/codex-retry.test.js
   +  const delays = [];
   +  const controllers = [];
   +  const retryNotices = [];
-  +  const state = { turnStarted: true, turnCompleted: true, currentThreadId: 'thread-1' };
+  +  const state = { turnStarted: true, turnCompleted: false, currentThreadId: 'thread-1' };
   +
   +  const result = await runCodexTurnWithRetry({
   +    state,
@@ -938,11 +983,8 @@ ai-bridge/services/codex/codex-retry.test.js
   +      return 'done';
   +    },
   +    sleep: async (ms) => { delays.push(ms); },
-  +    onRetry: (notice) => retryNotices.push(notice),
-  +  });
-  +
-  ... (96 lines truncated)
-  +196 -0
+  ... (119 lines truncated)
+  +219 -0
 
 ai-bridge/services/codex/message-service.js
   @@ -26,7 +26,8 @@ import {
@@ -952,7 +994,7 @@ ai-bridge/services/codex/message-service.js
    } from './codex-utils.js';
    import { collectAgentsInstructions } from './codex-agents-loader.js';
    import {
-  @@ -34,6 +35,37 @@ import {
+  @@ -34,6 +35,41 @@ import {
   +import { runCodexTurnWithRetry } from './codex-retry.js';
   +
   +export async function runCodexMessageAttempts({
@@ -962,6 +1004,7 @@ ai-bridge/services/codex/message-service.js
   +  config,
   +  signal,
   +  processEvents = processCodexEventStream,
+  +  prepareReplayBoundary = prepareSessionReplayBoundary,
   +  sleep,
   +  onStreamStart,
   +  onRetry,
@@ -972,7 +1015,10 @@ ai-bridge/services/codex/message-service.js
   +    signal,
   +    sleep,
   +    onRetry,
-  +    runAttempt: async ({ turnAbortController }) => {
+  +    runAttempt: async ({ turnAbortController, retryCount }) => {
+  +      if (retryCount > 0) {
+  +        await prepareReplayBoundary(state, state.currentThreadId || config.threadId || null);
+  +      }
   +      const { events } = await thread.runStreamed(runInput, {
   +        signal: turnAbortController.signal,
   +      });
@@ -987,7 +1033,7 @@ ai-bridge/services/codex/message-service.js
    
    // ---------------------------------------------------------------------------
    // sendMessage
-  @@ -260,13 +292,6 @@ export async function sendMessage(
+  @@ -260,13 +296,6 @@ export async function sendMessage(
   -    const turnAbortController = new AbortController();
   -    const { events } = await thread.runStreamed(runInput, {
   -      signal: turnAbortController.signal
@@ -998,7 +1044,7 @@ ai-bridge/services/codex/message-service.js
        // ============================================================
        // 7. Delegate Event Processing to codex-event-handler
        // ============================================================
-  @@ -276,12 +301,28 @@ export async function sendMessage(
+  @@ -276,12 +305,28 @@ export async function sendMessage(
   -      turnAbortController,
   -      onTurnCompleted: emitStreamEndOnce,
   -      onTurnFailed: emitStreamEndOnce
@@ -1028,10 +1074,10 @@ ai-bridge/services/codex/message-service.js
        emitStreamEndOnce();
    
        // ============================================================
-  +53 -12
+  +57 -12
 
 ai-bridge/services/codex/message-service.retry.test.js
-  @@ -0,0 +1,78 @@
+  @@ -0,0 +1,84 @@
   +import test from 'node:test';
   +import assert from 'node:assert/strict';
   +import { runCodexMessageAttempts } from './message-service.js';
@@ -1041,6 +1087,7 @@ ai-bridge/services/codex/message-service.retry.test.js
   +  const runCalls = [];
   +  const attemptControllers = [];
   +  const retryNotices = [];
+  +  const replayBoundaries = [];
   +  let streamStarts = 0;
   +  let streamEnds = 0;
   +  let processCalls = 0;
@@ -1072,6 +1119,10 @@ ai-bridge/services/codex/message-service.retry.test.js
   +    sleep: async (ms) => assert.equal(ms, 30_000),
   +    onStreamStart: () => { streamStarts += 1; },
   +    onRetry: (notice) => retryNotices.push(notice),
+  +    prepareReplayBoundary: async (receivedState, threadId) => {
+  +      assert.equal(receivedState, state);
+  +      replayBoundaries.push(threadId);
+  +    },
   +  });
   +
   +  assert.equal(runCalls.length, 2);
@@ -1081,6 +1132,7 @@ ai-bridge/services/codex/message-service.retry.test.js
   +  assert.equal(streamStarts, 1);
   +  assert.equal(streamEnds, 1);
   +  assert.equal(retryNotices.length, 1);
+  +  assert.deepEqual(replayBoundaries, ['thread-1']);
   +  assert.equal(state.currentThreadId, 'thread-1');
   +});
   +
@@ -1110,5 +1162,5 @@ ai-bridge/services/codex/message-service.retry.test.js
   +  assert.equal(processCalls, 1);
   +  assert.equal(streamStarts, 1);
   +});
-  +78 -0
+  +84 -0
 [full diff: rtk git diff --no-compact]
