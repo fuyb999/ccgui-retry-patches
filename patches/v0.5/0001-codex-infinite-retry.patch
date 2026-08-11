@@ -1,0 +1,1112 @@
+ai-bridge/services/codex/codex-event-handler.js    |  11 +-
+ .../services/codex/codex-event-handler.test.js     |  40 +++++
+ ai-bridge/services/codex/codex-retry.js            | 157 +++++++++++++++++
+ ai-bridge/services/codex/codex-retry.test.js       | 196 +++++++++++++++++++++
+ ai-bridge/services/codex/message-service.js        |  65 +++++--
+ .../services/codex/message-service.retry.test.js   |  78 ++++++++
+ 6 files changed, 527 insertions(+), 20 deletions(-)
+
+diff --git a/ai-bridge/services/codex/codex-event-handler.js b/ai-bridge/services/codex/codex-event-handler.js
+index b519699c..b9c384c4 100644
+--- a/ai-bridge/services/codex/codex-event-handler.js
++++ b/ai-bridge/services/codex/codex-event-handler.js
+@@ -34,6 +34,7 @@ import {
+   parseFunctionCallArguments, normalizeFunctionCallTool,
+   rememberToolInvocation, findMatchingToolUseId,
+ } from './codex-tool-normalization.js';
++import { CodexTurnFailure } from './codex-retry.js';
+ 
+ const COMMAND_DENIED_ABORT_ERROR = '__CODEX_COMMAND_DENIED_ABORT__';
+ const CODEX_USAGE_FIELDS = [
+@@ -1061,11 +1062,8 @@ export async function processCodexEventStream(events, state, config) {
+           logInfo('PERM_DEBUG', `Ignore turn.failed after command denial abort: ${errorMsg}`);
+           break;
+         }
+-        if (typeof config.onTurnFailed === 'function') {
+-          config.onTurnFailed(event, state);
+-        }
+         console.error('[DEBUG] Turn failed:', errorMsg);
+-        throw new Error(errorMsg);
++        throw new CodexTurnFailure(errorMsg, event);
+       }
+ 
+       case 'error': {
+@@ -1079,11 +1077,8 @@ export async function processCodexEventStream(events, state, config) {
+           logInfo('PERM_DEBUG', `Ignore error event after command denial abort: ${generalError}`);
+           break;
+         }
+-        if (typeof config.onTurnFailed === 'function') {
+-          config.onTurnFailed(event, state);
+-        }
+         console.error('[DEBUG] Codex error:', generalError);
+-        throw new Error(generalError);
++        throw new CodexTurnFailure(generalError, event);
+       }
+ 
+       default: {
+diff --git a/ai-bridge/services/codex/codex-event-handler.test.js b/ai-bridge/services/codex/codex-event-handler.test.js
+index 5c4c9816..a1a90629 100644
+--- a/ai-bridge/services/codex/codex-event-handler.test.js
++++ b/ai-bridge/services/codex/codex-event-handler.test.js
+@@ -9,6 +9,7 @@ import {
+   prepareSessionReplayBoundary,
+   processCodexEventStream,
+ } from './codex-event-handler.js';
++import { CodexTurnFailure } from './codex-retry.js';
+ 
+ async function* eventsFrom(items) {
+   for (const item of items) {
+@@ -57,6 +58,45 @@ const CUSTOM_EXEC_PATCH = [
+ 
+ const CUSTOM_EXEC_SOURCE = `const patch = ${JSON.stringify(CUSTOM_EXEC_PATCH)}; text(await tools.apply_patch(patch));`;
+ 
++test('turn.failed preserves structured details for the retry coordinator', async () => {
++  const state = createInitialEventState(() => {});
++  let turnFailedCalls = 0;
++  const event = {
++    type: 'turn.failed',
++    error: { message: 'HTTP 502 from upstream', status: 502, code: 'server_error' },
++  };
++
++  await assert.rejects(
++    captureStdout(() => processCodexEventStream(
++      eventsFrom([event]),
++      state,
++      { ...makeConfig(), onTurnFailed: () => { turnFailedCalls += 1; } },
++    )),
++    (error) => error instanceof CodexTurnFailure && error.details === event,
++  );
++  assert.equal(turnFailedCalls, 0);
++});
++
++test('error event preserves structured details for the retry coordinator', async () => {
++  const state = createInitialEventState(() => {});
++  let turnFailedCalls = 0;
++  const event = {
++    type: 'error',
++    message: 'Selected model is at capacity. Please try a different model.',
++    code: 'model_at_capacity',
++  };
++
++  await assert.rejects(
++    captureStdout(() => processCodexEventStream(
++      eventsFrom([event]),
++      state,
++      { ...makeConfig(), onTurnFailed: () => { turnFailedCalls += 1; } },
++    )),
++    (error) => error instanceof CodexTurnFailure && error.details === event,
++  );
++  assert.equal(turnFailedCalls, 0);
++});
++
+ test('custom_tool_call exec apply_patch emits edit and result messages without file_change', async () => {
+   const emittedMessages = [];
+   const state = createInitialEventState((message) => emittedMessages.push(message));
+diff --git a/ai-bridge/services/codex/codex-retry.js b/ai-bridge/services/codex/codex-retry.js
+new file mode 100644
+index 00000000..a0ef8a1b
+--- /dev/null
++++ b/ai-bridge/services/codex/codex-retry.js
+@@ -0,0 +1,157 @@
++export const CODEX_RETRY_DELAY_MS = 30_000;
++
++const TERMINAL_HTTP_STATUSES = new Set([400, 401, 403]);
++const NETWORK_ERROR_CODES = new Set([
++  'ECONNRESET',
++  'ECONNREFUSED',
++  'EPIPE',
++  'ETIMEDOUT',
++  'ENETDOWN',
++  'ENETRESET',
++  'ENETUNREACH',
++  'EHOSTDOWN',
++  'EHOSTUNREACH',
++  'ENOTFOUND',
++  'EAI_AGAIN',
++  'UND_ERR_CONNECT_TIMEOUT',
++  'UND_ERR_HEADERS_TIMEOUT',
++  'UND_ERR_BODY_TIMEOUT',
++  'UND_ERR_SOCKET',
++]);
++
++export class CodexTurnFailure extends Error {
++  constructor(message, details) {
++    super(message, details instanceof Error ? { cause: details } : undefined);
++    this.name = 'CodexTurnFailure';
++    this.details = details;
++  }
++}
++
++function numericStatus(value) {
++  if (typeof value === 'number' && Number.isInteger(value)) return value;
++  if (typeof value === 'string' && /^\d{3}$/.test(value.trim())) return Number(value);
++  return null;
++}
++
++function collectErrorEvidence(root) {
++  const statuses = new Set();
++  const codes = new Set();
++  const messages = [];
++  const seen = new Set();
++  const pending = [root];
++
++  while (pending.length > 0) {
++    const value = pending.pop();
++    if (value == null) continue;
++    if (typeof value === 'string') {
++      messages.push(value);
++      continue;
++    }
++    if (typeof value !== 'object' || seen.has(value)) continue;
++    seen.add(value);
++
++    for (const key of ['status', 'statusCode', 'httpStatus', 'http_status']) {
++      const status = numericStatus(value[key]);
++      if (status !== null) statuses.add(status);
++    }
++
++    if (typeof value.code === 'string') codes.add(value.code.toUpperCase());
++    if (typeof value.type === 'string') codes.add(value.type.toUpperCase());
++    if (typeof value.message === 'string') messages.push(value.message);
++
++    for (const key of ['error', 'cause', 'details', 'response']) {
++      if (value[key] != null) pending.push(value[key]);
++    }
++  }
++
++  const combinedMessage = messages.join('\n');
++  const bareStatus = numericStatus(combinedMessage.trim());
++  if (bareStatus !== null) statuses.add(bareStatus);
++  for (const match of combinedMessage.matchAll(/\b(?:http(?:\s+status)?|status(?:\s+code)?)[\s:=]*(\d{3})\b/gi)) {
++    statuses.add(Number(match[1]));
++  }
++  return { statuses, codes, message: combinedMessage };
++}
++
++export function isRetryableCodexError(error) {
++  const { statuses, codes, message } = collectErrorEvidence(error);
++  if ([...statuses].some((status) => TERMINAL_HTTP_STATUSES.has(status))) return false;
++  if (statuses.has(429) || [...statuses].some((status) => status >= 500 && status <= 599)) return true;
++  if ([...codes].some((code) => NETWORK_ERROR_CODES.has(code))) return true;
++  if ([...codes].some((code) => code === 'MODEL_AT_CAPACITY' || code === 'RATE_LIMIT_EXCEEDED')) return true;
++
++  return /selected model is at capacity|model[_\s-]?at[_\s-]?capacity|\btoo many requests\b|\brate limit(?:ed| exceeded)?\b/i.test(message) ||
++    /\bfetch failed\b|\bnetwork error\b|socket (?:closed|hang up)|connection (?:reset|refused|closed|terminated)|premature (?:eof|stream|closure)|stream (?:ended|closed|terminated) (?:early|unexpectedly)|dns (?:lookup )?fail|timed? out/i.test(message);
++}
++
++function createAbortError(signal) {
++  const error = new Error('Codex retry cancelled', signal?.reason ? { cause: signal.reason } : undefined);
++  error.name = 'AbortError';
++  return error;
++}
++
++export function abortableDelay(ms, signal, timers = globalThis) {
++  if (signal?.aborted) return Promise.reject(createAbortError(signal));
++
++  return new Promise((resolve, reject) => {
++    let timer;
++    const cleanup = () => signal?.removeEventListener('abort', onAbort);
++    const onAbort = () => {
++      timers.clearTimeout(timer);
++      cleanup();
++      reject(createAbortError(signal));
++    };
++    timer = timers.setTimeout(() => {
++      cleanup();
++      resolve();
++    }, ms);
++    signal?.addEventListener('abort', onAbort, { once: true });
++  });
++}
++
++export function resetCodexAttemptState(state) {
++  if (!state || typeof state !== 'object') return;
++  state.turnStarted = false;
++  state.turnCompleted = false;
++  state.turnUsageBaseline = null;
++  state.latestTotalTokenUsage = null;
++  state.commandApprovalAbortRequested = false;
++}
++
++function linkAbortSignal(signal, turnAbortController) {
++  if (!signal) return () => {};
++  const abortAttempt = () => turnAbortController.abort(signal.reason);
++  if (signal.aborted) abortAttempt();
++  else signal.addEventListener('abort', abortAttempt, { once: true });
++  return () => signal.removeEventListener('abort', abortAttempt);
++}
++
++export async function runCodexTurnWithRetry({
++  state,
++  signal,
++  runAttempt,
++  sleep = abortableDelay,
++  onRetry,
++}) {
++  if (typeof runAttempt !== 'function') throw new TypeError('runAttempt must be a function');
++  let retryCount = 0;
++
++  while (true) {
++    if (signal?.aborted) throw createAbortError(signal);
++    const turnAbortController = new AbortController();
++    const unlinkAbortSignal = linkAbortSignal(signal, turnAbortController);
++    try {
++      return await runAttempt({ turnAbortController, retryCount });
++    } catch (error) {
++      if (signal?.aborted || turnAbortController.signal.aborted || !isRetryableCodexError(error)) {
++        throw error;
++      }
++      retryCount += 1;
++      onRetry?.({ error, retryCount, delayMs: CODEX_RETRY_DELAY_MS });
++      await sleep(CODEX_RETRY_DELAY_MS, signal);
++      resetCodexAttemptState(state);
++    } finally {
++      unlinkAbortSignal();
++    }
++  }
++}
+diff --git a/ai-bridge/services/codex/codex-retry.test.js b/ai-bridge/services/codex/codex-retry.test.js
+new file mode 100644
+index 00000000..79e2baa6
+--- /dev/null
++++ b/ai-bridge/services/codex/codex-retry.test.js
+@@ -0,0 +1,196 @@
++import test from 'node:test';
++import assert from 'node:assert/strict';
++import {
++  CODEX_RETRY_DELAY_MS,
++  CodexTurnFailure,
++  abortableDelay,
++  isRetryableCodexError,
++  runCodexTurnWithRetry,
++} from './codex-retry.js';
++
++test('classifies capacity, rate limit, server, and transport failures as retryable', () => {
++  const retryable = [
++    { status: 429 },
++    { statusCode: 500 },
++    { status: 502 },
++    { response: { status: 503 } },
++    { httpStatus: 599 },
++    { code: 'model_at_capacity' },
++    new Error('Selected model is at capacity. Please try a different model.'),
++    new Error('429 Too Many Requests'),
++    new Error('429'),
++    new Error('502'),
++    Object.assign(new Error('fetch failed'), { code: 'ECONNRESET' }),
++    new Error('socket closed before the response completed'),
++    new CodexTurnFailure('stream failed', { error: { code: 'ETIMEDOUT' } }),
++  ];
++
++  for (const error of retryable) {
++    assert.equal(isRetryableCodexError(error), true, JSON.stringify(error));
++  }
++});
++
++test('keeps client and authentication failures terminal', () => {
++  for (const status of [400, 401, 403]) {
++    assert.equal(isRetryableCodexError({ status }), false);
++    assert.equal(isRetryableCodexError(new Error(`HTTP ${status}`)), false);
++    assert.equal(
++      isRetryableCodexError({ message: 'fetch failed', response: { status } }),
++      false,
++      `HTTP ${status} must take precedence over transport text`,
++    );
++  }
++  assert.equal(isRetryableCodexError(new Error('invalid request')), false);
++  assert.equal(isRetryableCodexError({ status: 404 }), false);
++});
++
++test('uses a fixed 30 second abortable delay', async () => {
++  assert.equal(CODEX_RETRY_DELAY_MS, 30_000);
++
++  let requestedDelay = null;
++  let completeTimer;
++  const timers = {
++    setTimeout(callback, delay) {
++      requestedDelay = delay;
++      completeTimer = callback;
++      return 17;
++    },
++    clearTimeout() {},
++  };
++
++  const waiting = abortableDelay(CODEX_RETRY_DELAY_MS, undefined, timers);
++  assert.equal(requestedDelay, 30_000);
++  completeTimer();
++  await waiting;
++});
++
++test('cancels a pending retry delay', async () => {
++  const controller = new AbortController();
++  let clearedTimer = null;
++  const timers = {
++    setTimeout() { return 23; },
++    clearTimeout(timer) { clearedTimer = timer; },
++  };
++
++  const waiting = abortableDelay(CODEX_RETRY_DELAY_MS, controller.signal, timers);
++  controller.abort();
++
++  await assert.rejects(waiting, (error) => error?.name === 'AbortError');
++  assert.equal(clearedTimer, 23);
++});
++
++test('retries without a maximum attempt count at a fixed delay', async () => {
++  const failures = [429, 500, 502, 503, 599, 429, 502];
++  const delays = [];
++  const controllers = [];
++  const retryNotices = [];
++  const state = { turnStarted: true, turnCompleted: true, currentThreadId: 'thread-1' };
++
++  const result = await runCodexTurnWithRetry({
++    state,
++    runAttempt: async ({ turnAbortController }) => {
++      controllers.push(turnAbortController);
++      const status = failures.shift();
++      if (status) throw new CodexTurnFailure(`HTTP ${status}`, { status });
++      return 'done';
++    },
++    sleep: async (ms) => { delays.push(ms); },
++    onRetry: (notice) => retryNotices.push(notice),
++  });
++
++  assert.equal(result, 'done');
++  assert.deepEqual(delays, Array(7).fill(30_000));
++  assert.equal(retryNotices.length, 7);
++  assert.equal(new Set(controllers).size, 8);
++  assert.equal(state.currentThreadId, 'thread-1');
++});
++
++test('does not retry HTTP 400, 401, or 403', async () => {
++  for (const status of [400, 401, 403]) {
++    let attempts = 0;
++    await assert.rejects(
++      runCodexTurnWithRetry({
++        state: {},
++        runAttempt: async () => {
++          attempts += 1;
++          throw new CodexTurnFailure(`HTTP ${status}`, { status });
++        },
++        sleep: async () => assert.fail('terminal failure must not sleep'),
++      }),
++      (error) => error.details.status === status,
++    );
++    assert.equal(attempts, 1);
++  }
++});
++
++test('resets attempt-local flags while preserving logical output state', async () => {
++  const emittedToolUseIds = new Set(['tool-1']);
++  const state = {
++    turnStarted: true,
++    turnCompleted: true,
++    turnUsageBaseline: { input_tokens: 10 },
++    latestTotalTokenUsage: { input_tokens: 20 },
++    commandApprovalAbortRequested: false,
++    currentThreadId: 'thread-preserved',
++    assistantText: 'partial output',
++    emittedToolUseIds,
++  };
++  let attempts = 0;
++
++  await runCodexTurnWithRetry({
++    state,
++    runAttempt: async () => {
++      attempts += 1;
++      if (attempts === 1) throw new Error('socket hang up');
++      assert.equal(state.turnStarted, false);
++      assert.equal(state.turnCompleted, false);
++      assert.equal(state.turnUsageBaseline, null);
++      assert.equal(state.latestTotalTokenUsage, null);
++      assert.equal(state.currentThreadId, 'thread-preserved');
++      assert.equal(state.assistantText, 'partial output');
++      assert.equal(state.emittedToolUseIds, emittedToolUseIds);
++    },
++    sleep: async () => {},
++  });
++});
++
++test('cancels while waiting for the next attempt', async () => {
++  const controller = new AbortController();
++  let attempts = 0;
++
++  await assert.rejects(
++    runCodexTurnWithRetry({
++      state: {},
++      signal: controller.signal,
++      runAttempt: async () => {
++        attempts += 1;
++        throw new Error('network error');
++      },
++      onRetry: () => controller.abort(),
++    }),
++    (error) => error?.name === 'AbortError',
++  );
++  assert.equal(attempts, 1);
++});
++
++test('cancels the active attempt and never retries cancellation', async () => {
++  const controller = new AbortController();
++  let attempts = 0;
++
++  const running = runCodexTurnWithRetry({
++    state: {},
++    signal: controller.signal,
++    runAttempt: ({ turnAbortController }) => new Promise((resolve, reject) => {
++      attempts += 1;
++      turnAbortController.signal.addEventListener('abort', () => {
++        const error = new Error('active turn aborted');
++        error.name = 'AbortError';
++        reject(error);
++      }, { once: true });
++    }),
++  });
++  controller.abort();
++
++  await assert.rejects(running, (error) => error?.name === 'AbortError');
++  assert.equal(attempts, 1);
++});
+diff --git a/ai-bridge/services/codex/message-service.js b/ai-bridge/services/codex/message-service.js
+index 9d2967b7..2b6e801c 100644
+--- a/ai-bridge/services/codex/message-service.js
++++ b/ai-bridge/services/codex/message-service.js
+@@ -26,7 +26,8 @@ import {
+   resolveSandboxModeOverride,
+   resolveApprovalPolicyOverride,
+   buildCodexCliEnvironment,
+-  buildErrorPayload
++  buildErrorPayload,
++  emitStatusMessage
+ } from './codex-utils.js';
+ import { collectAgentsInstructions } from './codex-agents-loader.js';
+ import {
+@@ -34,6 +35,37 @@ import {
+   prepareSessionReplayBoundary,
+   processCodexEventStream,
+ } from './codex-event-handler.js';
++import { runCodexTurnWithRetry } from './codex-retry.js';
++
++export async function runCodexMessageAttempts({
++  thread,
++  runInput,
++  state,
++  config,
++  signal,
++  processEvents = processCodexEventStream,
++  sleep,
++  onStreamStart,
++  onRetry,
++}) {
++  let streamStarted = false;
++  await runCodexTurnWithRetry({
++    state,
++    signal,
++    sleep,
++    onRetry,
++    runAttempt: async ({ turnAbortController }) => {
++      const { events } = await thread.runStreamed(runInput, {
++        signal: turnAbortController.signal,
++      });
++      if (!streamStarted) {
++        streamStarted = true;
++        onStreamStart?.();
++      }
++      await processEvents(events, state, { ...config, turnAbortController });
++    },
++  });
++}
+ 
+ // ---------------------------------------------------------------------------
+ // sendMessage
+@@ -260,13 +292,6 @@ export async function sendMessage(
+     const state = createInitialEventState(emitMessage);
+     await prepareSessionReplayBoundary(state, threadId);
+ 
+-    const turnAbortController = new AbortController();
+-    const { events } = await thread.runStreamed(runInput, {
+-      signal: turnAbortController.signal
+-    });
+-    console.log('[STREAM_START]');
+-    streamStarted = true;
+-
+     // ============================================================
+     // 7. Delegate Event Processing to codex-event-handler
+     // ============================================================
+@@ -276,12 +301,28 @@ export async function sendMessage(
+       threadId,
+       threadOptions,
+       normalizedPermissionMode,
+-      turnAbortController,
+-      onTurnCompleted: emitStreamEndOnce,
+-      onTurnFailed: emitStreamEndOnce
++      onTurnCompleted: emitStreamEndOnce
+     };
+ 
+-    await processCodexEventStream(events, state, config);
++    const operationAbortController = new AbortController();
++    await runCodexMessageAttempts({
++      thread,
++      runInput,
++      state,
++      config,
++      signal: operationAbortController.signal,
++      onStreamStart: () => {
++        console.log('[STREAM_START]');
++        streamStarted = true;
++      },
++      onRetry: ({ error, retryCount, delayMs }) => {
++        const reason = error?.message || String(error);
++        emitStatusMessage(
++          emitMessage,
++          `Codex request failed (${reason}); retry ${retryCount} in ${delayMs / 1000}s`,
++        );
++      },
++    });
+     emitStreamEndOnce();
+ 
+     // ============================================================
+diff --git a/ai-bridge/services/codex/message-service.retry.test.js b/ai-bridge/services/codex/message-service.retry.test.js
+new file mode 100644
+index 00000000..996a4d9b
+--- /dev/null
++++ b/ai-bridge/services/codex/message-service.retry.test.js
+@@ -0,0 +1,78 @@
++import test from 'node:test';
++import assert from 'node:assert/strict';
++import { runCodexMessageAttempts } from './message-service.js';
++import { CodexTurnFailure } from './codex-retry.js';
++
++test('keeps one logical stream open across a retry and reuses the thread input', async () => {
++  const runCalls = [];
++  const attemptControllers = [];
++  const retryNotices = [];
++  let streamStarts = 0;
++  let streamEnds = 0;
++  let processCalls = 0;
++  const runInput = [{ type: 'text', text: 'continue this task' }];
++  const state = { currentThreadId: 'thread-1' };
++  const thread = {
++    async runStreamed(input, options) {
++      runCalls.push(input);
++      attemptControllers.push(options.signal);
++      return { events: { attempt: runCalls.length } };
++    },
++  };
++
++  await runCodexMessageAttempts({
++    thread,
++    runInput,
++    state,
++    config: { onTurnCompleted: () => { streamEnds += 1; } },
++    processEvents: async (events, receivedState, config) => {
++      processCalls += 1;
++      assert.equal(receivedState, state);
++      assert.equal(events.attempt, processCalls);
++      assert.equal(config.turnAbortController.signal, attemptControllers.at(-1));
++      if (processCalls === 1) {
++        throw new CodexTurnFailure('HTTP 503', { status: 503 });
++      }
++      config.onTurnCompleted();
++    },
++    sleep: async (ms) => assert.equal(ms, 30_000),
++    onStreamStart: () => { streamStarts += 1; },
++    onRetry: (notice) => retryNotices.push(notice),
++  });
++
++  assert.equal(runCalls.length, 2);
++  assert.equal(runCalls[0], runInput);
++  assert.equal(runCalls[1], runInput);
++  assert.notEqual(attemptControllers[0], attemptControllers[1]);
++  assert.equal(streamStarts, 1);
++  assert.equal(streamEnds, 1);
++  assert.equal(retryNotices.length, 1);
++  assert.equal(state.currentThreadId, 'thread-1');
++});
++
++test('retries a transport failure thrown before event processing starts', async () => {
++  let runCalls = 0;
++  let processCalls = 0;
++  let streamStarts = 0;
++  const thread = {
++    async runStreamed() {
++      runCalls += 1;
++      if (runCalls === 1) throw Object.assign(new Error('fetch failed'), { code: 'ECONNREFUSED' });
++      return { events: [] };
++    },
++  };
++
++  await runCodexMessageAttempts({
++    thread,
++    runInput: 'retry me',
++    state: {},
++    config: {},
++    processEvents: async () => { processCalls += 1; },
++    sleep: async () => {},
++    onStreamStart: () => { streamStarts += 1; },
++  });
++
++  assert.equal(runCalls, 2);
++  assert.equal(processCalls, 1);
++  assert.equal(streamStarts, 1);
++});
+
+Changes:
+
+ai-bridge/services/codex/codex-event-handler.js
+  @@ -34,6 +34,7 @@ import {
+  +import { CodexTurnFailure } from './codex-retry.js';
+   
+   const COMMAND_DENIED_ABORT_ERROR = '__CODEX_COMMAND_DENIED_ABORT__';
+   const CODEX_USAGE_FIELDS = [
+  @@ -1061,11 +1062,8 @@ export async function processCodexEventStream(events, state, config) {
+  -        if (typeof config.onTurnFailed === 'function') {
+  -          config.onTurnFailed(event, state);
+  -        }
+           console.error('[DEBUG] Turn failed:', errorMsg);
+  -        throw new Error(errorMsg);
+  +        throw new CodexTurnFailure(errorMsg, event);
+         }
+   
+         case 'error': {
+  @@ -1079,11 +1077,8 @@ export async function processCodexEventStream(events, state, config) {
+  -        if (typeof config.onTurnFailed === 'function') {
+  -          config.onTurnFailed(event, state);
+  -        }
+           console.error('[DEBUG] Codex error:', generalError);
+  -        throw new Error(generalError);
+  +        throw new CodexTurnFailure(generalError, event);
+         }
+   
+         default: {
+  +3 -8
+
+ai-bridge/services/codex/codex-event-handler.test.js
+  @@ -9,6 +9,7 @@ import {
+  +import { CodexTurnFailure } from './codex-retry.js';
+   
+   async function* eventsFrom(items) {
+     for (const item of items) {
+  @@ -57,6 +58,45 @@ const CUSTOM_EXEC_PATCH = [
+  +test('turn.failed preserves structured details for the retry coordinator', async () => {
+  +  const state = createInitialEventState(() => {});
+  +  let turnFailedCalls = 0;
+  +  const event = {
+  +    type: 'turn.failed',
+  +    error: { message: 'HTTP 502 from upstream', status: 502, code: 'server_error' },
+  +  };
+  +
+  +  await assert.rejects(
+  +    captureStdout(() => processCodexEventStream(
+  +      eventsFrom([event]),
+  +      state,
+  +      { ...makeConfig(), onTurnFailed: () => { turnFailedCalls += 1; } },
+  +    )),
+  +    (error) => error instanceof CodexTurnFailure && error.details === event,
+  +  );
+  +  assert.equal(turnFailedCalls, 0);
+  +});
+  +
+  +test('error event preserves structured details for the retry coordinator', async () => {
+  +  const state = createInitialEventState(() => {});
+  +  let turnFailedCalls = 0;
+  +  const event = {
+  +    type: 'error',
+  +    message: 'Selected model is at capacity. Please try a different model.',
+  +    code: 'model_at_capacity',
+  +  };
+  +
+  +  await assert.rejects(
+  +    captureStdout(() => processCodexEventStream(
+  +      eventsFrom([event]),
+  +      state,
+  +      { ...makeConfig(), onTurnFailed: () => { turnFailedCalls += 1; } },
+  +    )),
+  +    (error) => error instanceof CodexTurnFailure && error.details === event,
+  +  );
+  +  assert.equal(turnFailedCalls, 0);
+  +});
+  +
+   test('custom_tool_call exec apply_patch emits edit and result messages without file_change', async () => {
+     const emittedMessages = [];
+     const state = createInitialEventState((message) => emittedMessages.push(message));
+  +40 -0
+
+ai-bridge/services/codex/codex-retry.js
+  @@ -0,0 +1,157 @@
+  +export const CODEX_RETRY_DELAY_MS = 30_000;
+  +
+  +const TERMINAL_HTTP_STATUSES = new Set([400, 401, 403]);
+  +const NETWORK_ERROR_CODES = new Set([
+  +  'ECONNRESET',
+  +  'ECONNREFUSED',
+  +  'EPIPE',
+  +  'ETIMEDOUT',
+  +  'ENETDOWN',
+  +  'ENETRESET',
+  +  'ENETUNREACH',
+  +  'EHOSTDOWN',
+  +  'EHOSTUNREACH',
+  +  'ENOTFOUND',
+  +  'EAI_AGAIN',
+  +  'UND_ERR_CONNECT_TIMEOUT',
+  +  'UND_ERR_HEADERS_TIMEOUT',
+  +  'UND_ERR_BODY_TIMEOUT',
+  +  'UND_ERR_SOCKET',
+  +]);
+  +
+  +export class CodexTurnFailure extends Error {
+  +  constructor(message, details) {
+  +    super(message, details instanceof Error ? { cause: details } : undefined);
+  +    this.name = 'CodexTurnFailure';
+  +    this.details = details;
+  +  }
+  +}
+  +
+  +function numericStatus(value) {
+  +  if (typeof value === 'number' && Number.isInteger(value)) return value;
+  +  if (typeof value === 'string' && /^\d{3}$/.test(value.trim())) return Number(value);
+  +  return null;
+  +}
+  +
+  +function collectErrorEvidence(root) {
+  +  const statuses = new Set();
+  +  const codes = new Set();
+  +  const messages = [];
+  +  const seen = new Set();
+  +  const pending = [root];
+  +
+  +  while (pending.length > 0) {
+  +    const value = pending.pop();
+  +    if (value == null) continue;
+  +    if (typeof value === 'string') {
+  +      messages.push(value);
+  +      continue;
+  +    }
+  +    if (typeof value !== 'object' || seen.has(value)) continue;
+  +    seen.add(value);
+  +
+  +    for (const key of ['status', 'statusCode', 'httpStatus', 'http_status']) {
+  +      const status = numericStatus(value[key]);
+  +      if (status !== null) statuses.add(status);
+  +    }
+  +
+  +    if (typeof value.code === 'string') codes.add(value.code.toUpperCase());
+  +    if (typeof value.type === 'string') codes.add(value.type.toUpperCase());
+  +    if (typeof value.message === 'string') messages.push(value.message);
+  +
+  +    for (const key of ['error', 'cause', 'details', 'response']) {
+  +      if (value[key] != null) pending.push(value[key]);
+  +    }
+  +  }
+  +
+  +  const combinedMessage = messages.join('\n');
+  +  const bareStatus = numericStatus(combinedMessage.trim());
+  +  if (bareStatus !== null) statuses.add(bareStatus);
+  +  for (const match of combinedMessage.matchAll(/\b(?:http(?:\s+status)?|status(?:\s+code)?)[\s:=]*(\d{3})\b/gi)) {
+  +    statuses.add(Number(match[1]));
+  +  }
+  +  return { statuses, codes, message: combinedMessage };
+  +}
+  +
+  +export function isRetryableCodexError(error) {
+  +  const { statuses, codes, message } = collectErrorEvidence(error);
+  +  if ([...statuses].some((status) => TERMINAL_HTTP_STATUSES.has(status))) return false;
+  +  if (statuses.has(429) || [...statuses].some((status) => status >= 500 && status <= 599)) return true;
+  +  if ([...codes].some((code) => NETWORK_ERROR_CODES.has(code))) return true;
+  +  if ([...codes].some((code) => code === 'MODEL_AT_CAPACITY' || code === 'RATE_LIMIT_EXCEEDED')) return true;
+  +
+  +  return /selected model is at capacity|model[_\s-]?at[_\s-]?capacity|\btoo many requests\b|\brate limit(?:ed| exceeded)?\b/i.test(message) ||
+  +    /\bfetch failed\b|\bnetwork error\b|socket (?:closed|hang up)|connection (?:reset|refused|closed|terminated)|premature (?:eof|stream|closure)|stream (?:ended|closed|terminated) (?:early|unexpectedly)|dns (?:lookup )?fail|timed? out/i.test(message);
+  +}
+  +
+  +function createAbortError(signal) {
+  +  const error = new Error('Codex retry cancelled', signal?.reason ? { cause: signal.reason } : undefined);
+  +  error.name = 'AbortError';
+  +  return error;
+  +}
+  +
+  +export function abortableDelay(ms, signal, timers = globalThis) {
+  +  if (signal?.aborted) return Promise.reject(createAbortError(signal));
+  +
+  +  return new Promise((resolve, reject) => {
+  +    let timer;
+  +    const cleanup = () => signal?.removeEventListener('abort', onAbort);
+  +    const onAbort = () => {
+  +      timers.clearTimeout(timer);
+  ... (57 lines truncated)
+  +157 -0
+
+ai-bridge/services/codex/codex-retry.test.js
+  @@ -0,0 +1,196 @@
+  +import test from 'node:test';
+  +import assert from 'node:assert/strict';
+  +import {
+  +  CODEX_RETRY_DELAY_MS,
+  +  CodexTurnFailure,
+  +  abortableDelay,
+  +  isRetryableCodexError,
+  +  runCodexTurnWithRetry,
+  +} from './codex-retry.js';
+  +
+  +test('classifies capacity, rate limit, server, and transport failures as retryable', () => {
+  +  const retryable = [
+  +    { status: 429 },
+  +    { statusCode: 500 },
+  +    { status: 502 },
+  +    { response: { status: 503 } },
+  +    { httpStatus: 599 },
+  +    { code: 'model_at_capacity' },
+  +    new Error('Selected model is at capacity. Please try a different model.'),
+  +    new Error('429 Too Many Requests'),
+  +    new Error('429'),
+  +    new Error('502'),
+  +    Object.assign(new Error('fetch failed'), { code: 'ECONNRESET' }),
+  +    new Error('socket closed before the response completed'),
+  +    new CodexTurnFailure('stream failed', { error: { code: 'ETIMEDOUT' } }),
+  +  ];
+  +
+  +  for (const error of retryable) {
+  +    assert.equal(isRetryableCodexError(error), true, JSON.stringify(error));
+  +  }
+  +});
+  +
+  +test('keeps client and authentication failures terminal', () => {
+  +  for (const status of [400, 401, 403]) {
+  +    assert.equal(isRetryableCodexError({ status }), false);
+  +    assert.equal(isRetryableCodexError(new Error(`HTTP ${status}`)), false);
+  +    assert.equal(
+  +      isRetryableCodexError({ message: 'fetch failed', response: { status } }),
+  +      false,
+  +      `HTTP ${status} must take precedence over transport text`,
+  +    );
+  +  }
+  +  assert.equal(isRetryableCodexError(new Error('invalid request')), false);
+  +  assert.equal(isRetryableCodexError({ status: 404 }), false);
+  +});
+  +
+  +test('uses a fixed 30 second abortable delay', async () => {
+  +  assert.equal(CODEX_RETRY_DELAY_MS, 30_000);
+  +
+  +  let requestedDelay = null;
+  +  let completeTimer;
+  +  const timers = {
+  +    setTimeout(callback, delay) {
+  +      requestedDelay = delay;
+  +      completeTimer = callback;
+  +      return 17;
+  +    },
+  +    clearTimeout() {},
+  +  };
+  +
+  +  const waiting = abortableDelay(CODEX_RETRY_DELAY_MS, undefined, timers);
+  +  assert.equal(requestedDelay, 30_000);
+  +  completeTimer();
+  +  await waiting;
+  +});
+  +
+  +test('cancels a pending retry delay', async () => {
+  +  const controller = new AbortController();
+  +  let clearedTimer = null;
+  +  const timers = {
+  +    setTimeout() { return 23; },
+  +    clearTimeout(timer) { clearedTimer = timer; },
+  +  };
+  +
+  +  const waiting = abortableDelay(CODEX_RETRY_DELAY_MS, controller.signal, timers);
+  +  controller.abort();
+  +
+  +  await assert.rejects(waiting, (error) => error?.name === 'AbortError');
+  +  assert.equal(clearedTimer, 23);
+  +});
+  +
+  +test('retries without a maximum attempt count at a fixed delay', async () => {
+  +  const failures = [429, 500, 502, 503, 599, 429, 502];
+  +  const delays = [];
+  +  const controllers = [];
+  +  const retryNotices = [];
+  +  const state = { turnStarted: true, turnCompleted: true, currentThreadId: 'thread-1' };
+  +
+  +  const result = await runCodexTurnWithRetry({
+  +    state,
+  +    runAttempt: async ({ turnAbortController }) => {
+  +      controllers.push(turnAbortController);
+  +      const status = failures.shift();
+  +      if (status) throw new CodexTurnFailure(`HTTP ${status}`, { status });
+  +      return 'done';
+  +    },
+  +    sleep: async (ms) => { delays.push(ms); },
+  +    onRetry: (notice) => retryNotices.push(notice),
+  +  });
+  +
+  ... (96 lines truncated)
+  +196 -0
+
+ai-bridge/services/codex/message-service.js
+  @@ -26,7 +26,8 @@ import {
+  -  buildErrorPayload
+  +  buildErrorPayload,
+  +  emitStatusMessage
+   } from './codex-utils.js';
+   import { collectAgentsInstructions } from './codex-agents-loader.js';
+   import {
+  @@ -34,6 +35,37 @@ import {
+  +import { runCodexTurnWithRetry } from './codex-retry.js';
+  +
+  +export async function runCodexMessageAttempts({
+  +  thread,
+  +  runInput,
+  +  state,
+  +  config,
+  +  signal,
+  +  processEvents = processCodexEventStream,
+  +  sleep,
+  +  onStreamStart,
+  +  onRetry,
+  +}) {
+  +  let streamStarted = false;
+  +  await runCodexTurnWithRetry({
+  +    state,
+  +    signal,
+  +    sleep,
+  +    onRetry,
+  +    runAttempt: async ({ turnAbortController }) => {
+  +      const { events } = await thread.runStreamed(runInput, {
+  +        signal: turnAbortController.signal,
+  +      });
+  +      if (!streamStarted) {
+  +        streamStarted = true;
+  +        onStreamStart?.();
+  +      }
+  +      await processEvents(events, state, { ...config, turnAbortController });
+  +    },
+  +  });
+  +}
+   
+   // ---------------------------------------------------------------------------
+   // sendMessage
+  @@ -260,13 +292,6 @@ export async function sendMessage(
+  -    const turnAbortController = new AbortController();
+  -    const { events } = await thread.runStreamed(runInput, {
+  -      signal: turnAbortController.signal
+  -    });
+  -    console.log('[STREAM_START]');
+  -    streamStarted = true;
+  -
+       // ============================================================
+       // 7. Delegate Event Processing to codex-event-handler
+       // ============================================================
+  @@ -276,12 +301,28 @@ export async function sendMessage(
+  -      turnAbortController,
+  -      onTurnCompleted: emitStreamEndOnce,
+  -      onTurnFailed: emitStreamEndOnce
+  +      onTurnCompleted: emitStreamEndOnce
+       };
+   
+  -    await processCodexEventStream(events, state, config);
+  +    const operationAbortController = new AbortController();
+  +    await runCodexMessageAttempts({
+  +      thread,
+  +      runInput,
+  +      state,
+  +      config,
+  +      signal: operationAbortController.signal,
+  +      onStreamStart: () => {
+  +        console.log('[STREAM_START]');
+  +        streamStarted = true;
+  +      },
+  +      onRetry: ({ error, retryCount, delayMs }) => {
+  +        const reason = error?.message || String(error);
+  +        emitStatusMessage(
+  +          emitMessage,
+  +          `Codex request failed (${reason}); retry ${retryCount} in ${delayMs / 1000}s`,
+  +        );
+  +      },
+  +    });
+       emitStreamEndOnce();
+   
+       // ============================================================
+  +53 -12
+
+ai-bridge/services/codex/message-service.retry.test.js
+  @@ -0,0 +1,78 @@
+  +import test from 'node:test';
+  +import assert from 'node:assert/strict';
+  +import { runCodexMessageAttempts } from './message-service.js';
+  +import { CodexTurnFailure } from './codex-retry.js';
+  +
+  +test('keeps one logical stream open across a retry and reuses the thread input', async () => {
+  +  const runCalls = [];
+  +  const attemptControllers = [];
+  +  const retryNotices = [];
+  +  let streamStarts = 0;
+  +  let streamEnds = 0;
+  +  let processCalls = 0;
+  +  const runInput = [{ type: 'text', text: 'continue this task' }];
+  +  const state = { currentThreadId: 'thread-1' };
+  +  const thread = {
+  +    async runStreamed(input, options) {
+  +      runCalls.push(input);
+  +      attemptControllers.push(options.signal);
+  +      return { events: { attempt: runCalls.length } };
+  +    },
+  +  };
+  +
+  +  await runCodexMessageAttempts({
+  +    thread,
+  +    runInput,
+  +    state,
+  +    config: { onTurnCompleted: () => { streamEnds += 1; } },
+  +    processEvents: async (events, receivedState, config) => {
+  +      processCalls += 1;
+  +      assert.equal(receivedState, state);
+  +      assert.equal(events.attempt, processCalls);
+  +      assert.equal(config.turnAbortController.signal, attemptControllers.at(-1));
+  +      if (processCalls === 1) {
+  +        throw new CodexTurnFailure('HTTP 503', { status: 503 });
+  +      }
+  +      config.onTurnCompleted();
+  +    },
+  +    sleep: async (ms) => assert.equal(ms, 30_000),
+  +    onStreamStart: () => { streamStarts += 1; },
+  +    onRetry: (notice) => retryNotices.push(notice),
+  +  });
+  +
+  +  assert.equal(runCalls.length, 2);
+  +  assert.equal(runCalls[0], runInput);
+  +  assert.equal(runCalls[1], runInput);
+  +  assert.notEqual(attemptControllers[0], attemptControllers[1]);
+  +  assert.equal(streamStarts, 1);
+  +  assert.equal(streamEnds, 1);
+  +  assert.equal(retryNotices.length, 1);
+  +  assert.equal(state.currentThreadId, 'thread-1');
+  +});
+  +
+  +test('retries a transport failure thrown before event processing starts', async () => {
+  +  let runCalls = 0;
+  +  let processCalls = 0;
+  +  let streamStarts = 0;
+  +  const thread = {
+  +    async runStreamed() {
+  +      runCalls += 1;
+  +      if (runCalls === 1) throw Object.assign(new Error('fetch failed'), { code: 'ECONNREFUSED' });
+  +      return { events: [] };
+  +    },
+  +  };
+  +
+  +  await runCodexMessageAttempts({
+  +    thread,
+  +    runInput: 'retry me',
+  +    state: {},
+  +    config: {},
+  +    processEvents: async () => { processCalls += 1; },
+  +    sleep: async () => {},
+  +    onStreamStart: () => { streamStarts += 1; },
+  +  });
+  +
+  +  assert.equal(runCalls, 2);
+  +  assert.equal(processCalls, 1);
+  +  assert.equal(streamStarts, 1);
+  +});
+  +78 -0
+[full diff: rtk git diff --no-compact]
