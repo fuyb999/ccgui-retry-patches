@@ -1,0 +1,19 @@
+{
+  "schemaVersion": 1,
+  "version": "v0.5",
+  "upstream": {
+    "repository": "https://github.com/zhukunpenglinyutong/jetbrains-cc-gui.git",
+    "tag": "v0.5",
+    "commit": "76247b2001c17ff4de28b98458b5e7ed0860962e"
+  },
+  "pluginVersion": "0.5",
+  "bridgeVersion": "1.0.0",
+  "sourceHashes": {
+    "ai-bridge/services/codex/message-service.js": "63963fb93aebe746278deeeda661034452613d9abb258650d2eb01d90d062f1f",
+    "ai-bridge/services/codex/codex-event-handler.js": "a2bdf050089bb2ac8d07554aea469bb9e533ff995b6a17862ac88825743519b5"
+  },
+  "patches": [
+    "patches/v0.5/0001-codex-infinite-retry.patch"
+  ],
+  "artifact": "ccgui-0.5-retry.1.zip"
+}
