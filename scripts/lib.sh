@@ -141,6 +141,17 @@ run_bridge_tests() {
   (cd "$CHECKOUT" && node --test "${tests[@]}")
 }
 
+install_webview_dependencies() {
+  [[ -f "$CHECKOUT/webview/package.json" ]] || return 0
+  [[ ! -x "$CHECKOUT/webview/node_modules/.bin/tsc" ]] || return 0
+  require_command npm
+  if [[ -f "$CHECKOUT/webview/package-lock.json" ]]; then
+    (cd "$CHECKOUT/webview" && npm ci --no-audit --no-fund)
+  else
+    (cd "$CHECKOUT/webview" && npm install --no-audit --no-fund)
+  fi
+}
+
 find_single_distribution() {
   local distributions=()
   shopt -s nullglob

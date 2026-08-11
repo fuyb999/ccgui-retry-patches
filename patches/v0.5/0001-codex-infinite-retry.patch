@@ -1,10 +1,10 @@
 ai-bridge/services/codex/codex-event-handler.js    |  11 +-
  .../services/codex/codex-event-handler.test.js     |  40 +++++
- ai-bridge/services/codex/codex-retry.js            | 157 +++++++++++++++++
+ ai-bridge/services/codex/codex-retry.js            | 159 +++++++++++++++++
  ai-bridge/services/codex/codex-retry.test.js       | 196 +++++++++++++++++++++
  ai-bridge/services/codex/message-service.js        |  65 +++++--
  .../services/codex/message-service.retry.test.js   |  78 ++++++++
- 6 files changed, 527 insertions(+), 20 deletions(-)
+ 6 files changed, 529 insertions(+), 20 deletions(-)
 
 diff --git a/ai-bridge/services/codex/codex-event-handler.js b/ai-bridge/services/codex/codex-event-handler.js
 index b519699c..b9c384c4 100644
@@ -104,13 +104,12 @@ index 5c4c9816..a1a90629 100644
    const state = createInitialEventState((message) => emittedMessages.push(message));
 diff --git a/ai-bridge/services/codex/codex-retry.js b/ai-bridge/services/codex/codex-retry.js
 new file mode 100644
-index 00000000..a0ef8a1b
+index 00000000..0dadeae5
 --- /dev/null
 +++ b/ai-bridge/services/codex/codex-retry.js
-@@ -0,0 +1,157 @@
+@@ -0,0 +1,159 @@
 +export const CODEX_RETRY_DELAY_MS = 30_000;
 +
-+const TERMINAL_HTTP_STATUSES = new Set([400, 401, 403]);
 +const NETWORK_ERROR_CODES = new Set([
 +  'ECONNRESET',
 +  'ECONNREFUSED',
@@ -138,8 +137,11 @@ index 00000000..a0ef8a1b
 +}
 +
 +function numericStatus(value) {
-+  if (typeof value === 'number' && Number.isInteger(value)) return value;
-+  if (typeof value === 'string' && /^\d{3}$/.test(value.trim())) return Number(value);
++  if (typeof value === 'number' && Number.isInteger(value) && value >= 100 && value <= 599) return value;
++  if (typeof value === 'string' && /^\d{3}$/.test(value.trim())) {
++    const parsed = Number(value);
++    if (parsed >= 100 && parsed <= 599) return parsed;
++  }
 +  return null;
 +}
 +
@@ -185,8 +187,8 @@ index 00000000..a0ef8a1b
 +
 +export function isRetryableCodexError(error) {
 +  const { statuses, codes, message } = collectErrorEvidence(error);
-+  if ([...statuses].some((status) => TERMINAL_HTTP_STATUSES.has(status))) return false;
 +  if (statuses.has(429) || [...statuses].some((status) => status >= 500 && status <= 599)) return true;
++  if (statuses.size > 0) return false;
 +  if ([...codes].some((code) => NETWORK_ERROR_CODES.has(code))) return true;
 +  if ([...codes].some((code) => code === 'MODEL_AT_CAPACITY' || code === 'RATE_LIMIT_EXCEEDED')) return true;
 +
@@ -267,7 +269,7 @@ index 00000000..a0ef8a1b
 +}
 diff --git a/ai-bridge/services/codex/codex-retry.test.js b/ai-bridge/services/codex/codex-retry.test.js
 new file mode 100644
-index 00000000..79e2baa6
+index 00000000..2cc06ffd
 --- /dev/null
 +++ b/ai-bridge/services/codex/codex-retry.test.js
 @@ -0,0 +1,196 @@
@@ -303,8 +305,8 @@ index 00000000..79e2baa6
 +  }
 +});
 +
-+test('keeps client and authentication failures terminal', () => {
-+  for (const status of [400, 401, 403]) {
++test('keeps non-retryable HTTP failures terminal', () => {
++  for (const status of [400, 401, 403, 404, 408, 422]) {
 +    assert.equal(isRetryableCodexError({ status }), false);
 +    assert.equal(isRetryableCodexError(new Error(`HTTP ${status}`)), false);
 +    assert.equal(
@@ -733,10 +735,9 @@ ai-bridge/services/codex/codex-event-handler.test.js
   +40 -0
 
 ai-bridge/services/codex/codex-retry.js
-  @@ -0,0 +1,157 @@
+  @@ -0,0 +1,159 @@
   +export const CODEX_RETRY_DELAY_MS = 30_000;
   +
-  +const TERMINAL_HTTP_STATUSES = new Set([400, 401, 403]);
   +const NETWORK_ERROR_CODES = new Set([
   +  'ECONNRESET',
   +  'ECONNREFUSED',
@@ -764,8 +765,11 @@ ai-bridge/services/codex/codex-retry.js
   +}
   +
   +function numericStatus(value) {
-  +  if (typeof value === 'number' && Number.isInteger(value)) return value;
-  +  if (typeof value === 'string' && /^\d{3}$/.test(value.trim())) return Number(value);
+  +  if (typeof value === 'number' && Number.isInteger(value) && value >= 100 && value <= 599) return value;
+  +  if (typeof value === 'string' && /^\d{3}$/.test(value.trim())) {
+  +    const parsed = Number(value);
+  +    if (parsed >= 100 && parsed <= 599) return parsed;
+  +  }
   +  return null;
   +}
   +
@@ -811,8 +815,8 @@ ai-bridge/services/codex/codex-retry.js
   +
   +export function isRetryableCodexError(error) {
   +  const { statuses, codes, message } = collectErrorEvidence(error);
-  +  if ([...statuses].some((status) => TERMINAL_HTTP_STATUSES.has(status))) return false;
   +  if (statuses.has(429) || [...statuses].some((status) => status >= 500 && status <= 599)) return true;
+  +  if (statuses.size > 0) return false;
   +  if ([...codes].some((code) => NETWORK_ERROR_CODES.has(code))) return true;
   +  if ([...codes].some((code) => code === 'MODEL_AT_CAPACITY' || code === 'RATE_LIMIT_EXCEEDED')) return true;
   +
@@ -832,10 +836,8 @@ ai-bridge/services/codex/codex-retry.js
   +  return new Promise((resolve, reject) => {
   +    let timer;
   +    const cleanup = () => signal?.removeEventListener('abort', onAbort);
-  +    const onAbort = () => {
-  +      timers.clearTimeout(timer);
-  ... (57 lines truncated)
-  +157 -0
+  ... (59 lines truncated)
+  +159 -0
 
 ai-bridge/services/codex/codex-retry.test.js
   @@ -0,0 +1,196 @@
@@ -871,8 +873,8 @@ ai-bridge/services/codex/codex-retry.test.js
   +  }
   +});
   +
-  +test('keeps client and authentication failures terminal', () => {
-  +  for (const status of [400, 401, 403]) {
+  +test('keeps non-retryable HTTP failures terminal', () => {
+  +  for (const status of [400, 401, 403, 404, 408, 422]) {
   +    assert.equal(isRetryableCodexError({ status }), false);
   +    assert.equal(isRetryableCodexError(new Error(`HTTP ${status}`)), false);
   +    assert.equal(

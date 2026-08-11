@@ -20,6 +20,7 @@ if [[ "$MODE" == '--prepare-only' ]]; then
   exit 0
 fi
 
+install_webview_dependencies
 (cd "$CHECKOUT" && ./gradlew buildPlugin)
 distribution="$(find_single_distribution)"
 mkdir -p "$DIST_ROOT"
