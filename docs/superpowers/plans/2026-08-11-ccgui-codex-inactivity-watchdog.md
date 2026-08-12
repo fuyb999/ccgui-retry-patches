@@ -126,8 +126,8 @@ Expected: workflow tests and all patched bridge tests pass.
 ### Task 5: Build, inspect, and commit the release artifact
 
 **Files:**
-- Replace: `dist/ccgui-0.5-retry.1.zip`
-- Replace: `dist/ccgui-0.5-retry.1.zip.sha256`
+- Create: `dist/ccgui-0.5-retry.2.zip`
+- Create: `dist/ccgui-0.5-retry.2.zip.sha256`
 
 - [ ] **Step 1: Build the plugin**
 

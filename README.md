@@ -8,7 +8,7 @@ hash set, and ordered Git patch list. Patches are never applied across versions.
 
 | CC GUI | Upstream commit | Patch artifact |
 | --- | --- | --- |
-| `v0.5` | `76247b2001c17ff4de28b98458b5e7ed0860962e` | `dist/ccgui-0.5-retry.1.zip` |
+| `v0.5` | `76247b2001c17ff4de28b98458b5e7ed0860962e` | `dist/ccgui-0.5-retry.2.zip` |
 
 ## Retry Policy
 
@@ -30,16 +30,24 @@ reusing the same thread object, input, and logical output state. Retry progress
 is emitted as a status event. The bridge does not emit `[STREAM_END]`,
 `[SEND_ERROR]`, or a final failure JSON between retry attempts.
 
+The bridge also retries when the Codex SDK produces no event for 5 minutes.
+This inactivity watchdog covers every wait for the next SDK event. Each received
+event starts a fresh interval, so it does not impose a total duration limit on
+active turns. Set `CCGUI_CODEX_INACTIVITY_TIMEOUT_MS` to a positive integer to
+override the 300,000 ms default. Invalid, zero, and negative values use the
+default.
+
 Stopping the CC GUI task terminates the bridge process, which also terminates an
 active request or pending delay. In-process abort signals cancel both an active
 attempt and a pending delay and are never retried.
 
 ## Side-Effect Warning
 
-Retries remain enabled after partial assistant output or tool activity. A failed
-attempt may already have run commands, edited files, called MCP tools, or caused
-other external side effects. A later attempt can repeat those effects. The
-bridge does not roll anything back.
+Retries, including inactivity retries, remain enabled after partial assistant
+output or tool activity. A failed or apparently inactive attempt may already
+have run commands, edited files, called MCP tools, or caused other external side
+effects. A later attempt can repeat those effects. The bridge does not roll
+anything back.
 
 This patch handles SDK failures and thrown request/stream errors. It does not
 parse textual `<subagent_notification>` content or recreate a failed subagent
@@ -90,7 +98,7 @@ rtk scripts/verify.sh v0.5
 1. Open IDEA settings.
 2. Go to **Plugins**.
 3. Open the gear menu and choose **Install Plugin from Disk**.
-4. Select `dist/ccgui-0.5-retry.1.zip`.
+4. Select `dist/ccgui-0.5-retry.2.zip`.
 5. Restart the IDE when prompted.
 
 The scripts never overwrite the currently installed plugin.
