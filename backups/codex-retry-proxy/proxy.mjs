@@ -392,7 +392,7 @@ export function createRetryProxy(options) {
 
 export function startFromEnvironment(env = process.env) {
   const server = createRetryProxy({
-    upstreamBaseUrl: env.CODEX_RETRY_UPSTREAM_URL || "https://ai.input.im",
+    upstreamBaseUrl: env.CODEX_RETRY_UPSTREAM_URL || "https://ai.xxx.xxx",
     retryDelayMs: env.CODEX_RETRY_DELAY_MS || "30000",
     logger: (message) => console.error(message),
   });

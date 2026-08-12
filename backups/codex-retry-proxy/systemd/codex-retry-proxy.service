@@ -7,7 +7,7 @@ After=network-online.target
 Type=simple
 WorkingDirectory=/home/develop/.local/share/codex-retry-proxy
 ExecStart=/usr/local/bin/node /home/develop/.local/share/codex-retry-proxy/proxy.mjs
-Environment=CODEX_RETRY_UPSTREAM_URL=https://ai.input.im
+Environment=CODEX_RETRY_UPSTREAM_URL=https://ai.xxx.xxx
 Environment=CODEX_RETRY_DELAY_MS=30000
 Environment=CODEX_RETRY_LISTEN_HOST=127.0.0.1
 Environment=CODEX_RETRY_LISTEN_PORT=18765
