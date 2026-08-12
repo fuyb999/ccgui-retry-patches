@@ -33,7 +33,7 @@ Alternatives were rejected for the following reasons:
 
 ## Configuration
 
-The default inactivity limit is 300,000 milliseconds (5 minutes). The bridge
+The default inactivity limit is 600,000 milliseconds (10 minutes). The bridge
 reads `CCGUI_CODEX_INACTIVITY_TIMEOUT_MS` as a positive integer so operators can
 tune it without rebuilding the plugin. Missing, empty, non-integer, zero, and
 negative values use the default.

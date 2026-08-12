@@ -8,7 +8,7 @@ hash set, and ordered Git patch list. Patches are never applied across versions.
 
 | CC GUI | Upstream commit | Patch artifact |
 | --- | --- | --- |
-| `v0.5` | `76247b2001c17ff4de28b98458b5e7ed0860962e` | `dist/ccgui-0.5-retry.2.zip` |
+| `v0.5` | `76247b2001c17ff4de28b98458b5e7ed0860962e` | `dist/ccgui-0.5-retry.3.zip` |
 
 ## Retry Policy
 
@@ -30,11 +30,11 @@ reusing the same thread object, input, and logical output state. Retry progress
 is emitted as a status event. The bridge does not emit `[STREAM_END]`,
 `[SEND_ERROR]`, or a final failure JSON between retry attempts.
 
-The bridge also retries when the Codex SDK produces no event for 5 minutes.
+The bridge also retries when the Codex SDK produces no event for 10 minutes.
 This inactivity watchdog covers every wait for the next SDK event. Each received
 event starts a fresh interval, so it does not impose a total duration limit on
 active turns. Set `CCGUI_CODEX_INACTIVITY_TIMEOUT_MS` to a positive integer to
-override the 300,000 ms default. Invalid, zero, and negative values use the
+override the 600,000 ms default. Invalid, zero, and negative values use the
 default.
 
 Stopping the CC GUI task terminates the bridge process, which also terminates an
@@ -98,7 +98,7 @@ rtk scripts/verify.sh v0.5
 1. Open IDEA settings.
 2. Go to **Plugins**.
 3. Open the gear menu and choose **Install Plugin from Disk**.
-4. Select `dist/ccgui-0.5-retry.2.zip`.
+4. Select `dist/ccgui-0.5-retry.3.zip`.
 5. Restart the IDE when prompted.
 
 The scripts never overwrite the currently installed plugin.

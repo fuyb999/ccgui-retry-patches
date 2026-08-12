@@ -21,5 +21,5 @@
     "ai-bridge/services/codex/message-service.retry.test.js",
     "ai-bridge/services/codex/codex-event-handler.test.js"
   ],
-  "artifact": "ccgui-0.5-retry.2.zip"
+  "artifact": "ccgui-0.5-retry.3.zip"
 }

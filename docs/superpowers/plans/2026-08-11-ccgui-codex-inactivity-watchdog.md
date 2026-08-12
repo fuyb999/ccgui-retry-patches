@@ -18,7 +18,7 @@
 
 - [ ] **Step 1: Record the diagnosed failure and selected inactivity semantics**
 
-Document the 300,000 ms default, `CCGUI_CODEX_INACTIVITY_TIMEOUT_MS` override,
+Document the 600,000 ms default, `CCGUI_CODEX_INACTIVITY_TIMEOUT_MS` override,
 per-event timer reset, typed internal abort, unchanged 30,000 ms delay, and
 unchanged terminal handling for user cancellation and HTTP 400/401/403.
 
@@ -109,7 +109,7 @@ manifest's pinned upstream hashes because they describe unmodified source.
 
 - [ ] **Step 2: Document configuration and operational behavior**
 
-Add the 5-minute default, environment override, inactivity retry flow, and
+Add the 10-minute default, environment override, inactivity retry flow, and
 duplicate-side-effect warning to the README.
 
 - [ ] **Step 3: Run repository and prepared-source verification**
@@ -126,8 +126,8 @@ Expected: workflow tests and all patched bridge tests pass.
 ### Task 5: Build, inspect, and commit the release artifact
 
 **Files:**
-- Create: `dist/ccgui-0.5-retry.2.zip`
-- Create: `dist/ccgui-0.5-retry.2.zip.sha256`
+- Create: `dist/ccgui-0.5-retry.3.zip`
+- Create: `dist/ccgui-0.5-retry.3.zip.sha256`
 
 - [ ] **Step 1: Build the plugin**
 

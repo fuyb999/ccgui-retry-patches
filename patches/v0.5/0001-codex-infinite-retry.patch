@@ -96,12 +96,12 @@ index 5c4c981651e2796beadf827c6b03fde3b3063d22..a1a90629d55941f3810d1446c6a8110a
    const state = createInitialEventState((message) => emittedMessages.push(message));
 diff --git a/ai-bridge/services/codex/codex-retry.js b/ai-bridge/services/codex/codex-retry.js
 new file mode 100644
-index 0000000000000000000000000000000000000000..6e0cd1398d4849128070f831db768a5e26b7df5b
+index 0000000000000000000000000000000000000000..28b848c3a83009bb0dbeeffdb45ddef14b606b48
 --- /dev/null
 +++ b/ai-bridge/services/codex/codex-retry.js
 @@ -0,0 +1,209 @@
 +export const CODEX_RETRY_DELAY_MS = 30_000;
-+export const CODEX_INACTIVITY_TIMEOUT_MS = 300_000;
++export const CODEX_INACTIVITY_TIMEOUT_MS = 600_000;
 +export const CODEX_INACTIVITY_TIMEOUT_CODE = 'CODEX_STREAM_INACTIVITY_TIMEOUT';
 +
 +const NETWORK_ERROR_CODES = new Set([
@@ -311,7 +311,7 @@ index 0000000000000000000000000000000000000000..6e0cd1398d4849128070f831db768a5e
 +}
 diff --git a/ai-bridge/services/codex/codex-retry.test.js b/ai-bridge/services/codex/codex-retry.test.js
 new file mode 100644
-index 0000000000000000000000000000000000000000..78b6a6dcc5b4c63e826dcfeaad5dd8f7140a9612
+index 0000000000000000000000000000000000000000..39f425eb2a8311c88af018f1cafc98a9df1ec9da
 --- /dev/null
 +++ b/ai-bridge/services/codex/codex-retry.test.js
 @@ -0,0 +1,269 @@
@@ -329,14 +329,14 @@ index 0000000000000000000000000000000000000000..78b6a6dcc5b4c63e826dcfeaad5dd8f7
 +  withCodexInactivityTimeout,
 +} from './codex-retry.js';
 +
-+test('uses a five minute inactivity timeout with positive integer overrides', () => {
-+  assert.equal(CODEX_INACTIVITY_TIMEOUT_MS, 300_000);
-+  assert.equal(resolveCodexInactivityTimeoutMs(undefined), 300_000);
-+  assert.equal(resolveCodexInactivityTimeoutMs(''), 300_000);
++test('uses a ten minute inactivity timeout with positive integer overrides', () => {
++  assert.equal(CODEX_INACTIVITY_TIMEOUT_MS, 600_000);
++  assert.equal(resolveCodexInactivityTimeoutMs(undefined), 600_000);
++  assert.equal(resolveCodexInactivityTimeoutMs(''), 600_000);
 +  assert.equal(resolveCodexInactivityTimeoutMs('45000'), 45_000);
 +
 +  for (const value of ['0', '-1', '1.5', 'invalid']) {
-+    assert.equal(resolveCodexInactivityTimeoutMs(value), 300_000, value);
++    assert.equal(resolveCodexInactivityTimeoutMs(value), 600_000, value);
 +  }
 +});
 +
