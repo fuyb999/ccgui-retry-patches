@@ -39,6 +39,12 @@ assert.deepEqual(reason, {
 assert.equal(JSON.stringify(reason).includes('must-not-cross'), false);
 ```
 
+Add classification tests for the two HTTP 429 families. A bare 429,
+`RATE_LIMIT_EXCEEDED`, and `Too Many Requests` remain retryable. A 429 carrying
+structured `reason: 'DAYLY\u2014LIMIT\u2014EXCEEDED'` or the message
+`daily usage limit exceeded` is terminal. Assert that daily-limit evidence wins
+when transient rate-limit evidence is also present.
+
 - [ ] **Step 2: Run the focused test and confirm RED**
 
 Run: `rtk node --test work/v0.5/ai-bridge/services/codex/codex-retry.test.js`
@@ -51,6 +57,12 @@ Reuse `collectErrorEvidence` and export `buildCodexRetryReason`. Select categori
 in this order: inactivity, capacity, rate limit, HTTP 5xx, network, fallback.
 Allow only status, normalized uppercase code, and a single-line 240-character
 message with credential-like values redacted.
+
+Normalize structured `reason`, `code`, and `type` identifiers to uppercase
+underscore form, including Unicode dash variants. Check explicit daily-limit
+codes and messages before any generic 429/rate-limit rule. Do not emit retry
+progress for daily-limit failures; throw them through the existing terminal
+error path.
 
 - [ ] **Step 4: Write failing attempt-start callback tests**
 

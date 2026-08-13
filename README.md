@@ -8,7 +8,7 @@ hash set, and ordered Git patch list. Patches are never applied across versions.
 
 | CC GUI | Upstream commit | Patch artifact |
 | --- | --- | --- |
-| `v0.5` | `76247b2001c17ff4de28b98458b5e7ed0860962e` | `dist/ccgui-0.5-retry.3.zip` |
+| `v0.5` | `76247b2001c17ff4de28b98458b5e7ed0860962e` | `dist/ccgui-0.5-retry.4.zip` |
 
 ## Retry Policy
 
@@ -17,18 +17,36 @@ fixed 30-second interval for:
 
 - model capacity failures, including `model_at_capacity` and
   `Selected model is at capacity`;
-- HTTP 429;
+- transient HTTP 429 rate limiting, including bare 429 and `Too Many Requests`;
 - HTTP 500 through 599, including 502 and 503;
 - connection, DNS, timeout, socket, fetch, and premature stream failures.
 
 HTTP 400, 401, and 403 are terminal and follow the existing CC GUI error path.
-Other errors are terminal unless a version-specific patch explicitly adds and
-tests them.
+An HTTP 429 is also terminal when it explicitly reports the daily usage limit
+through `reason=DAYLY-LIMIT-EXCEEDED` (the upstream spelling, including Unicode
+dash variants) or `message=daily usage limit exceeded`. Explicit daily-limit
+evidence takes precedence over generic rate-limit evidence. Other errors are
+terminal unless a version-specific patch explicitly adds and tests them.
 
 Every retry creates a fresh turn `AbortController` and SDK event stream while
 reusing the same thread object, input, and logical output state. Retry progress
-is emitted as a status event. The bridge does not emit `[STREAM_END]`,
+is emitted as a dedicated `[CODEX_RETRY]` event. The event is sanitized before
+crossing the IDEA/WebView boundary and contains only a retry phase, attempt
+number, absolute retry deadline, and a bounded reason summary. While waiting,
+CC GUI shows the retry number, safe reason, and a live 30-second countdown. The
+next attempt clears retry progress and restores ordinary loading. The bridge does not emit `[STREAM_END]`,
 `[SEND_ERROR]`, or a final failure JSON between retry attempts.
+
+The two lifecycle payloads are:
+
+```text
+[CODEX_RETRY] {"phase":"scheduled","retryCount":1,"delayMs":30000,"retryAt":...,"reason":{"category":"http_5xx","status":503,"code":"SERVER_ERROR","message":"HTTP 503"}}
+[CODEX_RETRY] {"phase":"attempt_started","retryCount":1}
+```
+
+Malformed payloads and unknown reason categories are ignored. Terminal 400, 401,
+403, and daily-limit 429 errors clear retry progress and follow the existing
+error display path.
 
 The bridge also retries when the Codex SDK produces no event for 10 minutes.
 This inactivity watchdog covers every wait for the next SDK event. Each received
@@ -98,7 +116,7 @@ rtk scripts/verify.sh v0.5
 1. Open IDEA settings.
 2. Go to **Plugins**.
 3. Open the gear menu and choose **Install Plugin from Disk**.
-4. Select `dist/ccgui-0.5-retry.3.zip`.
+4. Select `dist/ccgui-0.5-retry.4.zip`.
 5. Restart the IDE when prompted.
 
 The scripts never overwrite the currently installed plugin.

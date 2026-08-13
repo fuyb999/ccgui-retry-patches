@@ -7,10 +7,16 @@ normal request loading. Retryable failures must show retry progress until a new
 attempt starts. Terminal failures must leave loading and follow the existing
 error path.
 
-This design does not change retry classification or timing:
+Retry classification and timing are:
 
-- HTTP 429, HTTP 500-599, model capacity, transport failures, and Codex stream
-  inactivity remain infinitely retryable after a fixed 30-second delay.
+- HTTP 429 rate limiting, HTTP 500-599, model capacity, transport failures, and
+  Codex stream inactivity are infinitely retryable after a fixed 30-second
+  delay.
+- A daily usage limit is terminal even when its HTTP status is 429. The bridge
+  recognizes the upstream structured reason `DAYLY-LIMIT-EXCEEDED` (including
+  Unicode dash variants and the upstream `DAYLY` spelling) and the message
+  `daily usage limit exceeded`. Daily-limit evidence takes precedence over
+  generic 429 or rate-limit evidence.
 - HTTP 400, 401, and 403 remain terminal.
 - Other errors remain terminal unless the version-specific classifier already
   marks them retryable.
@@ -31,6 +37,11 @@ Existing assistant output and tool cards remain visible throughout.
 
 A terminal error never displays retry progress. It ends loading and continues
 through the existing error presentation path.
+
+A bare HTTP 429 or `Too Many Requests` remains retryable. This preserves
+recovery for transient throttling when an upstream or gateway omits structured
+details. Only explicit daily-limit evidence converts a 429 into a terminal
+error.
 
 ## Protocol
 
@@ -114,15 +125,18 @@ remaining labelled as retrying when JCEF drops one callback.
 
 Tests cover:
 
-1. safe reason classification and sanitization for capacity, 429, 5xx, network,
-   inactivity, and fallback retryable failures;
-2. scheduled and attempt-start callbacks across multiple attempts, including
+1. safe reason classification and sanitization for capacity, transient 429,
+   5xx, network, inactivity, and fallback retryable failures;
+2. terminal classification for 429 responses carrying
+   `DAYLY-LIMIT-EXCEEDED`, Unicode dash variants, or
+   `daily usage limit exceeded`, including precedence over rate-limit evidence;
+3. scheduled and attempt-start callbacks across multiple attempts, including
    cancellation during the delay;
-3. exact bridge protocol output without leaking nested error data;
-4. IDEA parser validation, forwarding, state replay, and cleanup;
-5. WebView retry countdown, retry-to-loading transition, stale-state cleanup,
+4. exact bridge protocol output without leaking nested error data;
+5. IDEA parser validation, forwarding, state replay, and cleanup;
+6. WebView retry countdown, retry-to-loading transition, stale-state cleanup,
    terminal errors, and malformed payloads;
-6. existing retry policy, bridge tests, WebView tests, Gradle build, versioned
+7. existing retry policy, bridge tests, WebView tests, Gradle build, versioned
    patch generation, and artifact verification.
 
 ## Versioning
