@@ -21,6 +21,9 @@ if [[ "$MODE" == '--prepare-only' ]]; then
 fi
 
 install_webview_dependencies
+(cd "$CHECKOUT/webview" && npm run prebuild)
+(cd "$CHECKOUT/webview" && npm test)
+(cd "$CHECKOUT" && ./gradlew test)
 (cd "$CHECKOUT" && ./gradlew buildPlugin)
 distribution="$(find_single_distribution)"
 mkdir -p "$DIST_ROOT"

@@ -32,7 +32,8 @@ Every retry creates a fresh turn `AbortController` and SDK event stream while
 reusing the same thread object, input, and logical output state. Retry progress
 is emitted as a dedicated `[CODEX_RETRY]` event. The event is sanitized before
 crossing the IDEA/WebView boundary and contains only a retry phase, attempt
-number, absolute retry deadline, and a bounded reason summary. While waiting,
+number, absolute retry deadline, and an allowlisted category/status/code reason.
+Arbitrary upstream error messages never cross the retry progress bridge. While waiting,
 CC GUI shows the retry number, safe reason, and a live 30-second countdown. The
 next attempt clears retry progress and restores ordinary loading. The bridge does not emit `[STREAM_END]`,
 `[SEND_ERROR]`, or a final failure JSON between retry attempts.
@@ -40,7 +41,7 @@ next attempt clears retry progress and restores ordinary loading. The bridge doe
 The two lifecycle payloads are:
 
 ```text
-[CODEX_RETRY] {"phase":"scheduled","retryCount":1,"delayMs":30000,"retryAt":...,"reason":{"category":"http_5xx","status":503,"code":"SERVER_ERROR","message":"HTTP 503"}}
+[CODEX_RETRY] {"phase":"scheduled","retryCount":1,"delayMs":30000,"retryAt":...,"reason":{"category":"http_5xx","status":503,"code":"SERVER_ERROR"}}
 [CODEX_RETRY] {"phase":"attempt_started","retryCount":1}
 ```
 
@@ -96,8 +97,11 @@ The build performs all of the following before producing an artifact:
 4. applies each patch with `git apply --check --whitespace=error-all`;
 5. runs the patched Codex Node tests;
 6. installs locked webview dependencies with `npm ci` when needed;
-7. runs Gradle `buildPlugin`;
-8. writes the renamed plugin ZIP and SHA-256 checksum under `dist/`.
+7. generates the ignored WebView version source using the upstream `prebuild` script;
+8. runs the complete WebView test suite and test TypeScript check;
+9. runs the Gradle test suite;
+10. runs Gradle `buildPlugin`;
+11. writes the renamed plugin ZIP and SHA-256 checksum under `dist/`.
 
 Run source preparation and patched tests without Gradle packaging:
 

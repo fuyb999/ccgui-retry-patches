@@ -41,10 +41,31 @@ create_fixture() {
   FIXTURE_PATCH="$TEMP_ROOT/fixture.patch"
   FIXTURE_WORK="$TEMP_ROOT/work"
   FIXTURE_DIST="$TEMP_ROOT/dist"
-  mkdir -p "$FIXTURE_REPO/ai-bridge/services/codex" "$FIXTURE_MANIFESTS"
+  mkdir -p "$FIXTURE_REPO/ai-bridge/services/codex" "$FIXTURE_REPO/webview" "$FIXTURE_MANIFESTS"
 
   printf "version = '0.5'\n" > "$FIXTURE_REPO/build.gradle"
   printf '{"name":"ai-bridge","version":"1.0.0","type":"module"}\n' > "$FIXTURE_REPO/ai-bridge/package.json"
+  printf '%s\n' \
+    '{' \
+    '  "name": "fixture-webview",' \
+    '  "version": "1.0.0",' \
+    '  "scripts": {' \
+    '    "prebuild": "node -e \"require('\''fs'\'').appendFileSync('\''../build-gates.log'\'', '\''webview-prebuild\\n'\'')\"",' \
+    '    "test": "node -e \"require('\''fs'\'').appendFileSync('\''../build-gates.log'\'', '\''webview-test\\n'\'')\""' \
+    '  }' \
+    '}' \
+    > "$FIXTURE_REPO/webview/package.json"
+  printf '%s\n' \
+    '{' \
+    '  "name": "fixture-webview",' \
+    '  "version": "1.0.0",' \
+    '  "lockfileVersion": 3,' \
+    '  "requires": true,' \
+    '  "packages": {' \
+    '    "": { "name": "fixture-webview", "version": "1.0.0" }' \
+    '  }' \
+    '}' \
+    > "$FIXTURE_REPO/webview/package-lock.json"
   printf "export const retryEnabled = false;\n" > "$FIXTURE_REPO/ai-bridge/services/codex/message-service.js"
   printf "export const handlerVersion = 'fixture';\n" > "$FIXTURE_REPO/ai-bridge/services/codex/codex-event-handler.js"
   printf '%s\n' \
@@ -56,13 +77,21 @@ create_fixture() {
   printf '%s\n' \
     '#!/usr/bin/env bash' \
     'set -euo pipefail' \
-    '[[ "${1:-}" == "buildPlugin" ]]' \
-    'mkdir -p build/distributions' \
-    'package_dir="$(mktemp -d)"' \
-    'mkdir -p "$package_dir/ccgui"' \
-    '(cd ai-bridge && zip -qr "$package_dir/ccgui/ai-bridge.zip" .)' \
-    '(cd "$package_dir" && zip -qr "$OLDPWD/build/distributions/ccgui-0.5.zip" ccgui)' \
-    'rm -rf "$package_dir"' \
+    'case "${1:-}" in' \
+    '  test)' \
+    '    printf "gradle-test\\n" >> build-gates.log' \
+    '    ;;' \
+    '  buildPlugin)' \
+    '    printf "build-plugin\\n" >> build-gates.log' \
+    '    mkdir -p build/distributions' \
+    '    package_dir="$(mktemp -d)"' \
+    '    mkdir -p "$package_dir/ccgui"' \
+    '    (cd ai-bridge && zip -qr "$package_dir/ccgui/ai-bridge.zip" .)' \
+    '    (cd "$package_dir" && zip -qr "$OLDPWD/build/distributions/ccgui-0.5.zip" ccgui)' \
+    '    rm -rf "$package_dir"' \
+    '    ;;' \
+    '  *) exit 2 ;;' \
+    'esac' \
     > "$FIXTURE_REPO/gradlew"
   chmod +x "$FIXTURE_REPO/gradlew"
 
@@ -122,6 +151,8 @@ test_fixture_build_and_verify_succeed() {
   fixture_command "$BUILD_SCRIPT" v0.5
   assert_file "$FIXTURE_DIST/ccgui-0.5-retry.1.zip"
   assert_file "$FIXTURE_DIST/ccgui-0.5-retry.1.zip.sha256"
+  [[ "$(<"$FIXTURE_WORK/v0.5/build-gates.log")" == $'webview-prebuild\nwebview-test\ngradle-test\nbuild-plugin' ]] || \
+    fail "release build did not prepare the WebView, run tests, and package in order"
   fixture_command "$VERIFY_SCRIPT" v0.5
 }
 
@@ -143,10 +174,53 @@ test_patch_failure_is_rejected() {
   run_expect_failure 'Patch does not apply cleanly' fixture_command "$BUILD_SCRIPT" v0.5 --prepare-only
 }
 
+test_retry_progress_patch_contains_bridge_and_ui_protocol() {
+  assert_file "$ROOT_DIR/patches/v0.5/0001-codex-infinite-retry.patch"
+  local patch
+  patch="$(<"$ROOT_DIR/patches/v0.5/0001-codex-infinite-retry.patch")"
+  [[ "$patch" == *"[CODEX_RETRY]"* ]] || fail "retry progress marker missing from versioned patch"
+  [[ "$patch" == *"onCodexRetryState"* ]] || fail "IDEA/WebView retry callback missing from versioned patch"
+  [[ "$patch" == *"retryAt"* ]] || fail "retry countdown deadline missing from versioned patch"
+  [[ "$patch" == *"DAYLY_LIMIT_EXCEEDED"* ]] || fail "daily-limit reason classifier missing from versioned patch"
+  [[ "$patch" == *"daily usage limit exceeded"* ]] || fail "daily-limit message classifier missing from versioned patch"
+  [[ "$patch" == *"SAFE_RETRY_CODES"* ]] || fail "retry reason code allowlist missing from versioned patch"
+  [[ "$patch" != *"sanitizeRetryMessage"* ]] || fail "arbitrary upstream retry messages must not cross the bridge"
+}
+
+test_manifest_hashes_cover_patched_existing_files() {
+  local patch="$ROOT_DIR/patches/v0.5/0001-codex-infinite-retry.patch"
+  local manifest="$ROOT_DIR/manifests/v0.5.json"
+  local created_paths
+  local added
+  local deleted
+  local path
+  local created
+  local is_created
+  created_paths="$(git apply --summary "$patch" | sed -n 's/^[[:space:]]*create mode [0-9][0-9]* //p')"
+
+  while IFS=$'\t' read -r added deleted path; do
+    [[ -n "$path" ]] || continue
+    is_created=false
+    while IFS= read -r created; do
+      if [[ "$created" == "$path" ]]; then
+        is_created=true
+        break
+      fi
+    done <<< "$created_paths"
+    [[ "$is_created" == true ]] && continue
+
+    jq -e --arg path "$path" \
+      '.sourceHashes[$path] | type == "string" and test("^[0-9a-f]{64}$")' \
+      "$manifest" >/dev/null || fail "source hash missing for patched file: $path"
+  done < <(git apply --numstat "$patch")
+}
+
 create_fixture
 test_unsupported_version_is_rejected
 test_fixture_build_and_verify_succeed
 test_commit_mismatch_is_rejected
 test_source_hash_mismatch_is_rejected
 test_patch_failure_is_rejected
+test_retry_progress_patch_contains_bridge_and_ui_protocol
+test_manifest_hashes_cover_patched_existing_files
 printf 'PASS: patch workflow\n'
