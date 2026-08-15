@@ -8,6 +8,7 @@ hash set, and ordered Git patch list. Patches are never applied across versions.
 
 | CC GUI | Upstream commit | Patch artifact |
 | --- | --- | --- |
+| `v0.5.2` | `077cccff6707c11796fb0fbd3445b66abd97f83e` | `dist/ccgui-0.5.2-retry.1.zip` |
 | `v0.5` | `76247b2001c17ff4de28b98458b5e7ed0860962e` | `dist/ccgui-0.5-retry.4.zip` |
 
 ## Retry Policy
@@ -33,17 +34,27 @@ reusing the same thread object, input, and logical output state. Retry progress
 is emitted as a dedicated `[CODEX_RETRY]` event. The event is sanitized before
 crossing the IDEA/WebView boundary and contains only a retry phase, attempt
 number, absolute retry deadline, and an allowlisted category/status/code reason.
-Arbitrary upstream error messages never cross the retry progress bridge. While waiting,
-CC GUI shows the retry number, safe reason, and a live 30-second countdown. The
-next attempt clears retry progress and restores ordinary loading. The bridge does not emit `[STREAM_END]`,
+Arbitrary upstream error messages never cross the retry progress bridge. While
+waiting, CC GUI shows the retry number, safe reason, and a live 30-second
+countdown. The initial attempt and every retry attempt remain explicitly marked
+as running and waiting for output. `onStreamStart`, historical messages, and an
+empty assistant placeholder do not falsely restore ordinary loading. Retry
+progress clears only after current-turn text, thinking, tool activity, or a
+terminal event reaches the UI. The bridge does not emit `[STREAM_END]`,
 `[SEND_ERROR]`, or a final failure JSON between retry attempts.
 
 The two lifecycle payloads are:
 
 ```text
+[CODEX_RETRY] {"phase":"attempt_started","retryCount":0}
 [CODEX_RETRY] {"phase":"scheduled","retryCount":1,"delayMs":30000,"retryAt":...,"reason":{"category":"http_5xx","status":503,"code":"SERVER_ERROR"}}
 [CODEX_RETRY] {"phase":"attempt_started","retryCount":1}
 ```
+
+`retryCount: 0` is the initial SDK attempt. Positive values identify retries.
+The `v0.5.2` build also retains the upstream streaming coalescer fix that sends
+the current message frame even when a newer frame has already been queued, so
+tool and result blocks are not held until stream completion.
 
 Malformed payloads and unknown reason categories are ignored. Terminal 400, 401,
 403, and daily-limit 429 errors clear retry progress and follow the existing
@@ -86,7 +97,7 @@ from a synthetic prompt.
 From this repository:
 
 ```bash
-rtk scripts/build.sh v0.5
+rtk scripts/build.sh v0.5.2
 ```
 
 The build performs all of the following before producing an artifact:
@@ -106,13 +117,13 @@ The build performs all of the following before producing an artifact:
 Run source preparation and patched tests without Gradle packaging:
 
 ```bash
-rtk scripts/build.sh v0.5 --prepare-only
+rtk scripts/build.sh v0.5.2 --prepare-only
 ```
 
 Verify an existing artifact, checksum, outer plugin ZIP, and embedded bridge:
 
 ```bash
-rtk scripts/verify.sh v0.5
+rtk scripts/verify.sh v0.5.2
 ```
 
 ## Install
@@ -120,7 +131,7 @@ rtk scripts/verify.sh v0.5
 1. Open IDEA settings.
 2. Go to **Plugins**.
 3. Open the gear menu and choose **Install Plugin from Disk**.
-4. Select `dist/ccgui-0.5-retry.4.zip`.
+4. Select `dist/ccgui-0.5.2-retry.1.zip`.
 5. Restart the IDE when prompted.
 
 The scripts never overwrite the currently installed plugin.

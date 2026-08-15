@@ -175,44 +175,73 @@ test_patch_failure_is_rejected() {
 }
 
 test_retry_progress_patch_contains_bridge_and_ui_protocol() {
-  assert_file "$ROOT_DIR/patches/v0.5/0001-codex-infinite-retry.patch"
+  local version
   local patch
-  patch="$(<"$ROOT_DIR/patches/v0.5/0001-codex-infinite-retry.patch")"
-  [[ "$patch" == *"[CODEX_RETRY]"* ]] || fail "retry progress marker missing from versioned patch"
-  [[ "$patch" == *"onCodexRetryState"* ]] || fail "IDEA/WebView retry callback missing from versioned patch"
-  [[ "$patch" == *"retryAt"* ]] || fail "retry countdown deadline missing from versioned patch"
-  [[ "$patch" == *"DAYLY_LIMIT_EXCEEDED"* ]] || fail "daily-limit reason classifier missing from versioned patch"
-  [[ "$patch" == *"daily usage limit exceeded"* ]] || fail "daily-limit message classifier missing from versioned patch"
-  [[ "$patch" == *"SAFE_RETRY_CODES"* ]] || fail "retry reason code allowlist missing from versioned patch"
-  [[ "$patch" != *"sanitizeRetryMessage"* ]] || fail "arbitrary upstream retry messages must not cross the bridge"
+  for version in v0.5 v0.5.2; do
+    assert_file "$ROOT_DIR/patches/$version/0001-codex-infinite-retry.patch"
+    patch="$(<"$ROOT_DIR/patches/$version/0001-codex-infinite-retry.patch")"
+    [[ "$patch" == *"[CODEX_RETRY]"* ]] || fail "$version retry progress marker missing"
+    [[ "$patch" == *"onCodexRetryState"* ]] || fail "$version IDEA/WebView retry callback missing"
+    [[ "$patch" == *"retryAt"* ]] || fail "$version retry countdown deadline missing"
+    [[ "$patch" == *"DAYLY_LIMIT_EXCEEDED"* ]] || fail "$version daily-limit reason classifier missing"
+    [[ "$patch" == *"daily usage limit exceeded"* ]] || fail "$version daily-limit message classifier missing"
+    [[ "$patch" == *"SAFE_RETRY_CODES"* ]] || fail "$version retry reason code allowlist missing"
+    [[ "$patch" != *"sanitizeRetryMessage"* ]] || fail "$version arbitrary retry messages cross the bridge"
+  done
+
+  [[ "$patch" == *"phase: 'attempt_started', retryCount: 0"* ]] || \
+    fail "v0.5.2 initial attempt state missing"
+  [[ "$patch" == *"hasVisibleCodexOutput"* ]] || \
+    fail "v0.5.2 visible-output guard missing"
+  [[ "$patch" == *"keeps attempt state through history and an empty assistant snapshot"* ]] || \
+    fail "v0.5.2 empty assistant regression test missing"
+}
+
+test_latest_release_has_versioned_retry_inputs() {
+  local manifest="$ROOT_DIR/manifests/v0.5.2.json"
+  local patch="$ROOT_DIR/patches/v0.5.2/0001-codex-infinite-retry.patch"
+  assert_file "$manifest"
+  assert_file "$patch"
+  jq -e '
+    .version == "v0.5.2" and
+    .upstream.tag == "v0.5.2" and
+    .upstream.commit == "077cccff6707c11796fb0fbd3445b66abd97f83e" and
+    .pluginVersion == "0.5.2" and
+    .artifact == "ccgui-0.5.2-retry.1.zip"
+  ' "$manifest" >/dev/null || fail "v0.5.2 manifest is not pinned to the latest release"
 }
 
 test_manifest_hashes_cover_patched_existing_files() {
-  local patch="$ROOT_DIR/patches/v0.5/0001-codex-infinite-retry.patch"
-  local manifest="$ROOT_DIR/manifests/v0.5.json"
+  local version
+  local patch
+  local manifest
   local created_paths
   local added
   local deleted
   local path
   local created
   local is_created
-  created_paths="$(git apply --summary "$patch" | sed -n 's/^[[:space:]]*create mode [0-9][0-9]* //p')"
+  for version in v0.5 v0.5.2; do
+    patch="$ROOT_DIR/patches/$version/0001-codex-infinite-retry.patch"
+    manifest="$ROOT_DIR/manifests/$version.json"
+    created_paths="$(git apply --summary "$patch" | sed -n 's/^[[:space:]]*create mode [0-9][0-9]* //p')"
 
-  while IFS=$'\t' read -r added deleted path; do
-    [[ -n "$path" ]] || continue
-    is_created=false
-    while IFS= read -r created; do
-      if [[ "$created" == "$path" ]]; then
-        is_created=true
-        break
-      fi
-    done <<< "$created_paths"
-    [[ "$is_created" == true ]] && continue
+    while IFS=$'\t' read -r added deleted path; do
+      [[ -n "$path" ]] || continue
+      is_created=false
+      while IFS= read -r created; do
+        if [[ "$created" == "$path" ]]; then
+          is_created=true
+          break
+        fi
+      done <<< "$created_paths"
+      [[ "$is_created" == true ]] && continue
 
-    jq -e --arg path "$path" \
-      '.sourceHashes[$path] | type == "string" and test("^[0-9a-f]{64}$")' \
-      "$manifest" >/dev/null || fail "source hash missing for patched file: $path"
-  done < <(git apply --numstat "$patch")
+      jq -e --arg path "$path" \
+        '.sourceHashes[$path] | type == "string" and test("^[0-9a-f]{64}$")' \
+        "$manifest" >/dev/null || fail "$version source hash missing for patched file: $path"
+    done < <(git apply --numstat "$patch")
+  done
 }
 
 create_fixture
@@ -222,5 +251,6 @@ test_commit_mismatch_is_rejected
 test_source_hash_mismatch_is_rejected
 test_patch_failure_is_rejected
 test_retry_progress_patch_contains_bridge_and_ui_protocol
+test_latest_release_has_versioned_retry_inputs
 test_manifest_hashes_cover_patched_existing_files
 printf 'PASS: patch workflow\n'

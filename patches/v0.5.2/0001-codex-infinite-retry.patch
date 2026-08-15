@@ -1,0 +1,3442 @@
+ai-bridge/services/codex/codex-event-handler.js    |  11 +-
+ .../services/codex/codex-event-handler.test.js     |  40 ++
+ ai-bridge/services/codex/codex-retry.js            | 295 +++++++++++++++
+ ai-bridge/services/codex/codex-retry.test.js       | 417 +++++++++++++++++++++
+ ai-bridge/services/codex/message-service.js        | 113 +++++-
+ .../services/codex/message-service.retry.test.js   | 308 +++++++++++++++
+ .../provider/codex/CodexSDKBridge.java             |   2 +
+ .../claudecodegui/session/CallbackHandler.java     |   6 +
+ .../claudecodegui/session/ClaudeSession.java       |   3 +
+ .../claudecodegui/session/CodexMessageHandler.java | 115 ++++++
+ .../session/SessionCallbackAdapter.java            | 138 +++++++
+ .../claudecodegui/ui/ChatWindowDelegate.java       |   6 +
+ .../ui/toolwindow/ClaudeChatWindow.java            |   7 +
+ .../provider/codex/CodexSDKBridgeProtocolTest.java |  20 +
+ .../session/CodexMessageHandlerTest.java           |  44 +++
+ .../session/SessionCallbackAdapterUsageTest.java   |  90 +++++
+ .../claudecodegui/ui/ChatWindowDelegateTest.java   |  27 ++
+ webview/src/App.tsx                                |   4 +-
+ webview/src/components/ChatScreen.tsx              |   5 +-
+ webview/src/components/MessageList.tsx             |   5 +-
+ webview/src/components/WaitingIndicator.test.tsx   |  86 +++++
+ webview/src/components/WaitingIndicator.tsx        |  51 ++-
+ webview/src/contexts/MessagesContext.tsx           |  21 +-
+ webview/src/global.d.ts                            |   2 +
+ webview/src/hooks/useWindowCallbacks.test.ts       | 130 +++++++
+ webview/src/hooks/useWindowCallbacks.ts            |   2 +
+ .../src/hooks/windowCallbacks/registerCallbacks.ts |   1 +
+ .../registerCallbacks/messageCallbacks.ts          | 111 ++++++
+ .../registerCallbacks/streamingCallbacks.ts        |   4 +
+ .../src/hooks/windowCallbacks/sessionTransition.ts |   3 +
+ webview/src/i18n/locales/en.json                   |   5 +
+ webview/src/i18n/locales/es.json                   |   5 +
+ webview/src/i18n/locales/fr.json                   |   5 +
+ webview/src/i18n/locales/hi.json                   |   5 +
+ webview/src/i18n/locales/ja.json                   |   5 +
+ webview/src/i18n/locales/ko.json                   |   5 +
+ webview/src/i18n/locales/pt-BR.json                |   5 +
+ webview/src/i18n/locales/ru.json                   |   5 +
+ webview/src/i18n/locales/zh-TW.json                |   5 +
+ webview/src/i18n/locales/zh.json                   |   5 +
+ 40 files changed, 2089 insertions(+), 28 deletions(-)
+
+diff --git a/ai-bridge/services/codex/codex-event-handler.js b/ai-bridge/services/codex/codex-event-handler.js
+index b519699ca4138228d118d37872999ba572214cd0..b9c384c4226355e28a6fedfc2b09870c472cddd8 100644
+--- a/ai-bridge/services/codex/codex-event-handler.js
++++ b/ai-bridge/services/codex/codex-event-handler.js
+@@ -34,6 +34,7 @@ import {
+   parseFunctionCallArguments, normalizeFunctionCallTool,
+   rememberToolInvocation, findMatchingToolUseId,
+ } from './codex-tool-normalization.js';
++import { CodexTurnFailure } from './codex-retry.js';
+ 
+ const COMMAND_DENIED_ABORT_ERROR = '__CODEX_COMMAND_DENIED_ABORT__';
+ const CODEX_USAGE_FIELDS = [
+@@ -1061,11 +1062,8 @@ export async function processCodexEventStream(events, state, config) {
+           logInfo('PERM_DEBUG', `Ignore turn.failed after command denial abort: ${errorMsg}`);
+           break;
+         }
+-        if (typeof config.onTurnFailed === 'function') {
+-          config.onTurnFailed(event, state);
+-        }
+         console.error('[DEBUG] Turn failed:', errorMsg);
+-        throw new Error(errorMsg);
++        throw new CodexTurnFailure(errorMsg, event);
+       }
+ 
+       case 'error': {
+@@ -1079,11 +1077,8 @@ export async function processCodexEventStream(events, state, config) {
+           logInfo('PERM_DEBUG', `Ignore error event after command denial abort: ${generalError}`);
+           break;
+         }
+-        if (typeof config.onTurnFailed === 'function') {
+-          config.onTurnFailed(event, state);
+-        }
+         console.error('[DEBUG] Codex error:', generalError);
+-        throw new Error(generalError);
++        throw new CodexTurnFailure(generalError, event);
+       }
+ 
+       default: {
+diff --git a/ai-bridge/services/codex/codex-event-handler.test.js b/ai-bridge/services/codex/codex-event-handler.test.js
+index 5c4c981651e2796beadf827c6b03fde3b3063d22..a1a90629d55941f3810d1446c6a8110a917b256f 100644
+--- a/ai-bridge/services/codex/codex-event-handler.test.js
++++ b/ai-bridge/services/codex/codex-event-handler.test.js
+@@ -9,6 +9,7 @@ import {
+   prepareSessionReplayBoundary,
+   processCodexEventStream,
+ } from './codex-event-handler.js';
++import { CodexTurnFailure } from './codex-retry.js';
+ 
+ async function* eventsFrom(items) {
+   for (const item of items) {
+@@ -57,6 +58,45 @@ const CUSTOM_EXEC_PATCH = [
+ 
+ const CUSTOM_EXEC_SOURCE = `const patch = ${JSON.stringify(CUSTOM_EXEC_PATCH)}; text(await tools.apply_patch(patch));`;
+ 
++test('turn.failed preserves structured details for the retry coordinator', async () => {
++  const state = createInitialEventState(() => {});
++  let turnFailedCalls = 0;
++  const event = {
++    type: 'turn.failed',
++    error: { message: 'HTTP 502 from upstream', status: 502, code: 'server_error' },
++  };
++
++  await assert.rejects(
++    captureStdout(() => processCodexEventStream(
++      eventsFrom([event]),
++      state,
++      { ...makeConfig(), onTurnFailed: () => { turnFailedCalls += 1; } },
++    )),
++    (error) => error instanceof CodexTurnFailure && error.details === event,
++  );
++  assert.equal(turnFailedCalls, 0);
++});
++
++test('error event preserves structured details for the retry coordinator', async () => {
++  const state = createInitialEventState(() => {});
++  let turnFailedCalls = 0;
++  const event = {
++    type: 'error',
++    message: 'Selected model is at capacity. Please try a different model.',
++    code: 'model_at_capacity',
++  };
++
++  await assert.rejects(
++    captureStdout(() => processCodexEventStream(
++      eventsFrom([event]),
++      state,
++      { ...makeConfig(), onTurnFailed: () => { turnFailedCalls += 1; } },
++    )),
++    (error) => error instanceof CodexTurnFailure && error.details === event,
++  );
++  assert.equal(turnFailedCalls, 0);
++});
++
+ test('custom_tool_call exec apply_patch emits edit and result messages without file_change', async () => {
+   const emittedMessages = [];
+   const state = createInitialEventState((message) => emittedMessages.push(message));
+diff --git a/ai-bridge/services/codex/codex-retry.js b/ai-bridge/services/codex/codex-retry.js
+new file mode 100644
+index 0000000000000000000000000000000000000000..2751a1574352c2432b2f22deceaecae6a203e665
+--- /dev/null
++++ b/ai-bridge/services/codex/codex-retry.js
+@@ -0,0 +1,295 @@
++export const CODEX_RETRY_DELAY_MS = 30_000;
++export const CODEX_INACTIVITY_TIMEOUT_MS = 600_000;
++export const CODEX_INACTIVITY_TIMEOUT_CODE = 'CODEX_STREAM_INACTIVITY_TIMEOUT';
++
++const NETWORK_ERROR_CODES = new Set([
++  'ECONNRESET',
++  'ECONNREFUSED',
++  'EPIPE',
++  'ETIMEDOUT',
++  'ENETDOWN',
++  'ENETRESET',
++  'ENETUNREACH',
++  'EHOSTDOWN',
++  'EHOSTUNREACH',
++  'ENOTFOUND',
++  'EAI_AGAIN',
++  'UND_ERR_CONNECT_TIMEOUT',
++  'UND_ERR_HEADERS_TIMEOUT',
++  'UND_ERR_BODY_TIMEOUT',
++  'UND_ERR_SOCKET',
++  CODEX_INACTIVITY_TIMEOUT_CODE,
++]);
++
++const DAILY_LIMIT_CODES = new Set([
++  'DAYLY_LIMIT_EXCEEDED',
++  'DAILY_LIMIT_EXCEEDED',
++  'DAILY_USAGE_LIMIT_EXCEEDED',
++]);
++
++const SAFE_RETRY_CODES = new Set([
++  ...NETWORK_ERROR_CODES,
++  'MODEL_AT_CAPACITY',
++  'RATE_LIMIT_EXCEEDED',
++  'SERVER_ERROR',
++  'INTERNAL_SERVER_ERROR',
++  'SERVICE_UNAVAILABLE',
++  'BAD_GATEWAY',
++  'GATEWAY_TIMEOUT',
++]);
++
++export class CodexInactivityTimeoutError extends Error {
++  constructor(timeoutMs) {
++    super(`Codex SDK stream produced no events for ${timeoutMs}ms`);
++    this.name = 'CodexInactivityTimeoutError';
++    this.code = CODEX_INACTIVITY_TIMEOUT_CODE;
++    this.timeoutMs = timeoutMs;
++  }
++}
++
++export class CodexTurnFailure extends Error {
++  constructor(message, details) {
++    super(message, details instanceof Error ? { cause: details } : undefined);
++    this.name = 'CodexTurnFailure';
++    this.details = details;
++  }
++}
++
++export function resolveCodexInactivityTimeoutMs(value) {
++  const parsed = typeof value === 'number' ? value : Number(value);
++  return Number.isSafeInteger(parsed) && parsed > 0 ? parsed : CODEX_INACTIVITY_TIMEOUT_MS;
++}
++
++function numericStatus(value) {
++  if (typeof value === 'number' && Number.isInteger(value) && value >= 100 && value <= 599) return value;
++  if (typeof value === 'string' && /^\d{3}$/.test(value.trim())) {
++    const parsed = Number(value);
++    if (parsed >= 100 && parsed <= 599) return parsed;
++  }
++  return null;
++}
++
++function normalizeErrorIdentifier(value) {
++  if (typeof value !== 'string') return null;
++  const normalized = value
++    .trim()
++    .toUpperCase()
++    .replace(/[\u2010-\u2015\u2212\uFE58\uFE63\uFF0D.\s-]+/g, '_')
++    .replace(/^_+|_+$/g, '');
++  return normalized || null;
++}
++
++function collectErrorEvidence(root) {
++  const statuses = new Set();
++  const codes = new Set();
++  const reasons = new Set();
++  const messages = [];
++  const seen = new Set();
++  const pending = [root];
++
++  while (pending.length > 0) {
++    const value = pending.pop();
++    if (value == null) continue;
++    if (typeof value === 'string') {
++      messages.push(value);
++      continue;
++    }
++    if (typeof value !== 'object' || seen.has(value)) continue;
++    seen.add(value);
++
++    for (const key of ['status', 'statusCode', 'httpStatus', 'http_status']) {
++      const status = numericStatus(value[key]);
++      if (status !== null) statuses.add(status);
++    }
++
++    for (const key of ['code', 'type']) {
++      const code = normalizeErrorIdentifier(value[key]);
++      if (code) codes.add(code);
++    }
++    const reason = normalizeErrorIdentifier(value.reason);
++    if (reason) reasons.add(reason);
++    if (typeof value.message === 'string') messages.push(value.message);
++
++    for (const key of ['error', 'cause', 'details', 'response']) {
++      if (value[key] != null) pending.push(value[key]);
++    }
++  }
++
++  const combinedMessage = messages.join('\n');
++  const bareStatus = numericStatus(combinedMessage.trim());
++  if (bareStatus !== null) statuses.add(bareStatus);
++  for (const match of combinedMessage.matchAll(/^\s*(\d{3})(?=\s|:|$)/gm)) {
++    const status = numericStatus(match[1]);
++    if (status !== null) statuses.add(status);
++  }
++  for (const match of combinedMessage.matchAll(/\b(?:http(?:\s+status)?|status(?:\s+code)?)[\s:=]*(\d{3})\b/gi)) {
++    statuses.add(Number(match[1]));
++  }
++  return { statuses, codes, reasons, message: combinedMessage };
++}
++
++function isDailyUsageLimit({ codes, reasons, message }) {
++  return [...codes, ...reasons].some((value) => DAILY_LIMIT_CODES.has(value)) ||
++    /\bdaily\s+usage\s+limit\s+exceeded\b/i.test(message);
++}
++
++function selectRetryStatus(statuses) {
++  if (statuses.has(429)) return 429;
++  return [...statuses].find((status) => status >= 500 && status <= 599) ?? null;
++}
++
++function selectRetryCode(codes) {
++  const code = [...codes].find((value) => SAFE_RETRY_CODES.has(value));
++  return code || null;
++}
++
++export function buildCodexRetryReason(error) {
++  const { statuses, codes, message } = collectErrorEvidence(error);
++  const status = selectRetryStatus(statuses);
++  const code = selectRetryCode(codes);
++  let category = 'retryable_error';
++
++  if (codes.has(CODEX_INACTIVITY_TIMEOUT_CODE)) {
++    category = 'inactivity';
++  } else if (codes.has('MODEL_AT_CAPACITY') ||
++      /selected model is at capacity|model[_\s-]?at[_\s-]?capacity/i.test(message)) {
++    category = 'capacity';
++  } else if (status === 429 || codes.has('RATE_LIMIT_EXCEEDED') ||
++      /\btoo many requests\b|\brate limit(?:ed| exceeded)?\b/i.test(message)) {
++    category = 'rate_limit';
++  } else if (status !== null && status >= 500 && status <= 599) {
++    category = 'http_5xx';
++  } else if ([...codes].some((value) => NETWORK_ERROR_CODES.has(value)) ||
++      /\bfetch failed\b|\bnetwork error\b|socket (?:closed|hang up)|connection (?:reset|refused|closed|terminated)|premature (?:eof|stream|closure)|stream (?:ended|closed|terminated) (?:early|unexpectedly)|dns (?:lookup )?fail|timed? out/i.test(message)) {
++    category = 'network';
++  }
++
++  return {
++    category,
++    ...(status !== null ? { status } : {}),
++    ...(code ? { code } : {}),
++  };
++}
++
++export function isRetryableCodexError(error) {
++  const evidence = collectErrorEvidence(error);
++  const { statuses, codes, message } = evidence;
++  if (isDailyUsageLimit(evidence)) return false;
++  if (statuses.has(429) || [...statuses].some((status) => status >= 500 && status <= 599)) return true;
++  if (statuses.size > 0) return false;
++  if ([...codes].some((code) => NETWORK_ERROR_CODES.has(code))) return true;
++  if ([...codes].some((code) => code === 'MODEL_AT_CAPACITY' || code === 'RATE_LIMIT_EXCEEDED')) return true;
++
++  return /selected model is at capacity|model[_\s-]?at[_\s-]?capacity|\btoo many requests\b|\brate limit(?:ed| exceeded)?\b/i.test(message) ||
++    /\bfetch failed\b|\bnetwork error\b|socket (?:closed|hang up)|connection (?:reset|refused|closed|terminated)|premature (?:eof|stream|closure)|stream (?:ended|closed|terminated) (?:early|unexpectedly)|dns (?:lookup )?fail|timed? out/i.test(message);
++}
++
++function createAbortError(signal) {
++  const error = new Error('Codex retry cancelled', signal?.reason ? { cause: signal.reason } : undefined);
++  error.name = 'AbortError';
++  return error;
++}
++
++export function abortableDelay(ms, signal, timers = globalThis) {
++  if (signal?.aborted) return Promise.reject(createAbortError(signal));
++
++  return new Promise((resolve, reject) => {
++    let timer;
++    const cleanup = () => signal?.removeEventListener('abort', onAbort);
++    const onAbort = () => {
++      timers.clearTimeout(timer);
++      cleanup();
++      reject(createAbortError(signal));
++    };
++    timer = timers.setTimeout(() => {
++      cleanup();
++      resolve();
++    }, ms);
++    signal?.addEventListener('abort', onAbort, { once: true });
++  });
++}
++
++export function withCodexInactivityTimeout(operation, {
++  timeoutMs = CODEX_INACTIVITY_TIMEOUT_MS,
++  turnAbortController,
++  timers = globalThis,
++} = {}) {
++  const resolvedTimeoutMs = resolveCodexInactivityTimeoutMs(timeoutMs);
++  let timer;
++  const timeout = new Promise((resolve, reject) => {
++    timer = timers.setTimeout(() => {
++      const error = new CodexInactivityTimeoutError(resolvedTimeoutMs);
++      turnAbortController?.abort(error);
++      reject(error);
++    }, resolvedTimeoutMs);
++  });
++
++  return Promise.race([Promise.resolve(operation), timeout])
++    .finally(() => timers.clearTimeout(timer));
++}
++
++export function resetCodexAttemptState(state) {
++  if (!state || typeof state !== 'object') return;
++  state.turnStarted = false;
++  state.turnCompleted = false;
++  state.turnUsageBaseline = null;
++  state.latestTotalTokenUsage = null;
++  state.commandApprovalAbortRequested = false;
++}
++
++function linkAbortSignal(signal, turnAbortController) {
++  if (!signal) return () => {};
++  const abortAttempt = () => turnAbortController.abort(signal.reason);
++  if (signal.aborted) abortAttempt();
++  else signal.addEventListener('abort', abortAttempt, { once: true });
++  return () => signal.removeEventListener('abort', abortAttempt);
++}
++
++export async function runCodexTurnWithRetry({
++  state,
++  signal,
++  runAttempt,
++  sleep = abortableDelay,
++  onRetry,
++  onAttemptStart,
++  now = Date.now,
++}) {
++  if (typeof runAttempt !== 'function') throw new TypeError('runAttempt must be a function');
++  let retryCount = 0;
++
++  while (true) {
++    if (signal?.aborted) throw createAbortError(signal);
++    if (retryCount > 0) onAttemptStart?.({ retryCount });
++    const turnAbortController = new AbortController();
++    const unlinkAbortSignal = linkAbortSignal(signal, turnAbortController);
++    try {
++      return await runAttempt({ turnAbortController, retryCount });
++    } catch (error) {
++      const attemptAbortReason = turnAbortController.signal.reason;
++      const inactivityError = attemptAbortReason?.code === CODEX_INACTIVITY_TIMEOUT_CODE
++        ? attemptAbortReason
++        : error?.code === CODEX_INACTIVITY_TIMEOUT_CODE ? error : null;
++      const retryError = inactivityError || error;
++      if (
++        signal?.aborted ||
++        (turnAbortController.signal.aborted && !inactivityError) ||
++        state?.turnCompleted ||
++        !isRetryableCodexError(retryError)
++      ) {
++        throw error;
++      }
++      retryCount += 1;
++      onRetry?.({
++        error: retryError,
++        retryCount,
++        delayMs: CODEX_RETRY_DELAY_MS,
++        retryAt: now() + CODEX_RETRY_DELAY_MS,
++        reason: buildCodexRetryReason(retryError),
++      });
++      await sleep(CODEX_RETRY_DELAY_MS, signal);
++      resetCodexAttemptState(state);
++    } finally {
++      unlinkAbortSignal();
++    }
++  }
++}
+diff --git a/ai-bridge/services/codex/codex-retry.test.js b/ai-bridge/services/codex/codex-retry.test.js
+new file mode 100644
+index 0000000000000000000000000000000000000000..6ca64ed4fc5a4e02be83c76e4229b8f57868e9d7
+--- /dev/null
++++ b/ai-bridge/services/codex/codex-retry.test.js
+@@ -0,0 +1,417 @@
++import test from 'node:test';
++import assert from 'node:assert/strict';
++import {
++  CODEX_INACTIVITY_TIMEOUT_MS,
++  CODEX_RETRY_DELAY_MS,
++  CodexInactivityTimeoutError,
++  CodexTurnFailure,
++  abortableDelay,
++  buildCodexRetryReason,
++  isRetryableCodexError,
++  resolveCodexInactivityTimeoutMs,
++  runCodexTurnWithRetry,
++  withCodexInactivityTimeout,
++} from './codex-retry.js';
++
++test('builds allowlisted retry reasons without arbitrary upstream messages', () => {
++  const reason = buildCodexRetryReason({
++    status: 503,
++    code: 'server_error',
++    message: 'HTTP 503 upstream rejected Bearer sk-live-secret at https://example.test?api_key=query-secret',
++    response: {
++      body: 'must-not-cross',
++      headers: { authorization: 'Bearer nested-secret' },
++      message: 'nested response message must not replace the root summary',
++    },
++  });
++
++  assert.equal(reason.category, 'http_5xx');
++  assert.equal(reason.status, 503);
++  assert.equal(reason.code, 'SERVER_ERROR');
++  assert.equal(Object.hasOwn(reason, 'message'), false);
++  assert.deepEqual(Object.keys(reason).sort(), ['category', 'code', 'status']);
++  assert.equal(JSON.stringify(reason).includes('sk-live-secret'), false);
++  assert.equal(JSON.stringify(reason).includes('query-secret'), false);
++  assert.equal(JSON.stringify(reason).includes('must-not-cross'), false);
++  assert.equal(JSON.stringify(reason).includes('nested-secret'), false);
++
++  const untrustedCode = buildCodexRetryReason({
++    status: 503,
++    code: 'sk_live_secret',
++  });
++  assert.equal(Object.hasOwn(untrustedCode, 'code'), false);
++});
++
++test('classifies safe retry reasons for every retry family', () => {
++  assert.equal(buildCodexRetryReason(new CodexInactivityTimeoutError(5_000)).category, 'inactivity');
++  assert.equal(buildCodexRetryReason({ code: 'model_at_capacity' }).category, 'capacity');
++  assert.equal(buildCodexRetryReason({ status: 429 }).category, 'rate_limit');
++  assert.equal(buildCodexRetryReason({ statusCode: 502 }).category, 'http_5xx');
++  assert.equal(buildCodexRetryReason({ code: 'ECONNRESET' }).category, 'network');
++  assert.equal(buildCodexRetryReason(new Error('retryable but unclassified')).category, 'retryable_error');
++});
++
++test('uses a ten minute inactivity timeout with positive integer overrides', () => {
++  assert.equal(CODEX_INACTIVITY_TIMEOUT_MS, 600_000);
++  assert.equal(resolveCodexInactivityTimeoutMs(undefined), 600_000);
++  assert.equal(resolveCodexInactivityTimeoutMs(''), 600_000);
++  assert.equal(resolveCodexInactivityTimeoutMs('45000'), 45_000);
++
++  for (const value of ['0', '-1', '1.5', 'invalid']) {
++    assert.equal(resolveCodexInactivityTimeoutMs(value), 600_000, value);
++  }
++});
++
++test('inactivity timeout aborts only the current attempt with a retryable error', async () => {
++  const turnAbortController = new AbortController();
++  let timerCallback;
++  let requestedDelay;
++  let clearedTimer;
++  const timers = {
++    setTimeout(callback, delay) {
++      timerCallback = callback;
++      requestedDelay = delay;
++      return 41;
++    },
++    clearTimeout(timer) {
++      clearedTimer = timer;
++    },
++  };
++
++  const waiting = withCodexInactivityTimeout(new Promise(() => {}), {
++    timeoutMs: 1_234,
++    turnAbortController,
++    timers,
++  });
++  assert.equal(requestedDelay, 1_234);
++  timerCallback();
++
++  await assert.rejects(waiting, (error) => {
++    assert.ok(error instanceof CodexInactivityTimeoutError);
++    assert.equal(error.code, 'CODEX_STREAM_INACTIVITY_TIMEOUT');
++    assert.equal(isRetryableCodexError(error), true);
++    assert.equal(turnAbortController.signal.reason, error);
++    return true;
++  });
++  assert.equal(turnAbortController.signal.aborted, true);
++  assert.equal(clearedTimer, 41);
++});
++
++test('classifies capacity, rate limit, server, and transport failures as retryable', () => {
++  const retryable = [
++    { status: 429 },
++    { statusCode: 500 },
++    { status: 502 },
++    { response: { status: 503 } },
++    { httpStatus: 599 },
++    { code: 'model_at_capacity' },
++    new Error('Selected model is at capacity. Please try a different model.'),
++    new Error('429 Too Many Requests'),
++    new Error('429'),
++    new Error('502'),
++    new Error('502 Bad Gateway'),
++    new Error('503 Service Unavailable'),
++    Object.assign(new Error('fetch failed'), { code: 'ECONNRESET' }),
++    new Error('socket closed before the response completed'),
++    new CodexTurnFailure('stream failed', { error: { code: 'ETIMEDOUT' } }),
++  ];
++
++  for (const error of retryable) {
++    assert.equal(isRetryableCodexError(error), true, JSON.stringify(error));
++  }
++});
++
++test('keeps transient HTTP 429 rate limiting retryable', () => {
++  const transientRateLimits = [
++    { status: 429 },
++    { status: 429, code: 'rate_limit_exceeded' },
++    { status: 429, message: 'Too Many Requests' },
++  ];
++
++  for (const error of transientRateLimits) {
++    assert.equal(isRetryableCodexError(error), true, JSON.stringify(error));
++  }
++});
++
++test('keeps daily usage limit failures terminal even when HTTP status is 429', async () => {
++  const dailyLimitFailures = [
++    {
++      status: 429,
++      reason: 'DAYLY\u2014LIMIT\u2014EXCEEDED',
++      message: 'Too Many Requests',
++    },
++    {
++      response: { status: 429 },
++      details: { error: { reason: 'dayly-limit-exceeded' } },
++    },
++    {
++      statusCode: 429,
++      code: 'rate_limit_exceeded',
++      message: 'daily usage limit exceeded',
++    },
++  ];
++
++  for (const failure of dailyLimitFailures) {
++    assert.equal(isRetryableCodexError(failure), false, JSON.stringify(failure));
++
++    let attempts = 0;
++    await assert.rejects(
++      runCodexTurnWithRetry({
++        state: {},
++        runAttempt: async () => {
++          attempts += 1;
++          throw new CodexTurnFailure('HTTP 429', failure);
++        },
++        sleep: async () => assert.fail('daily limit failure must not sleep'),
++      }),
++      (error) => error.details === failure,
++    );
++    assert.equal(attempts, 1);
++  }
++});
++
++test('keeps non-retryable HTTP failures terminal', () => {
++  for (const status of [400, 401, 403, 404, 408, 422]) {
++    assert.equal(isRetryableCodexError({ status }), false);
++    assert.equal(isRetryableCodexError(new Error(`HTTP ${status}`)), false);
++    assert.equal(
++      isRetryableCodexError({ message: 'fetch failed', response: { status } }),
++      false,
++      `HTTP ${status} must take precedence over transport text`,
++    );
++  }
++  assert.equal(isRetryableCodexError(new Error('invalid request')), false);
++  assert.equal(isRetryableCodexError(new Error('400 Bad Request')), false);
++  assert.equal(isRetryableCodexError({ status: 404 }), false);
++});
++
++test('uses a fixed 30 second abortable delay', async () => {
++  assert.equal(CODEX_RETRY_DELAY_MS, 30_000);
++
++  let requestedDelay = null;
++  let completeTimer;
++  const timers = {
++    setTimeout(callback, delay) {
++      requestedDelay = delay;
++      completeTimer = callback;
++      return 17;
++    },
++    clearTimeout() {},
++  };
++
++  const waiting = abortableDelay(CODEX_RETRY_DELAY_MS, undefined, timers);
++  assert.equal(requestedDelay, 30_000);
++  completeTimer();
++  await waiting;
++});
++
++test('cancels a pending retry delay', async () => {
++  const controller = new AbortController();
++  let clearedTimer = null;
++  const timers = {
++    setTimeout() { return 23; },
++    clearTimeout(timer) { clearedTimer = timer; },
++  };
++
++  const waiting = abortableDelay(CODEX_RETRY_DELAY_MS, controller.signal, timers);
++  controller.abort();
++
++  await assert.rejects(waiting, (error) => error?.name === 'AbortError');
++  assert.equal(clearedTimer, 23);
++});
++
++test('retries without a maximum attempt count at a fixed delay', async () => {
++  const failures = [429, 500, 502, 503, 599, 429, 502];
++  const delays = [];
++  const controllers = [];
++  const retryNotices = [];
++  const state = { turnStarted: true, turnCompleted: false, currentThreadId: 'thread-1' };
++
++  const result = await runCodexTurnWithRetry({
++    state,
++    runAttempt: async ({ turnAbortController }) => {
++      controllers.push(turnAbortController);
++      const status = failures.shift();
++      if (status) throw new CodexTurnFailure(`HTTP ${status}`, { status });
++      return 'done';
++    },
++    sleep: async (ms) => { delays.push(ms); },
++    onRetry: (notice) => retryNotices.push(notice),
++  });
++
++  assert.equal(result, 'done');
++  assert.deepEqual(delays, Array(7).fill(30_000));
++  assert.equal(retryNotices.length, 7);
++  assert.equal(new Set(controllers).size, 8);
++  assert.equal(state.currentThreadId, 'thread-1');
++});
++
++test('announces scheduled retries and starts only completed retry delays', async () => {
++  const lifecycle = [];
++  let attempts = 0;
++  const result = await runCodexTurnWithRetry({
++    state: {},
++    now: () => 1_000,
++    runAttempt: async ({ retryCount }) => {
++      attempts += 1;
++      lifecycle.push(`run:${retryCount}`);
++      if (attempts < 3) throw new CodexTurnFailure('HTTP 503', { status: 503 });
++      return 'done';
++    },
++    sleep: async () => { lifecycle.push('sleep'); },
++    onRetry: (notice) => lifecycle.push({
++      phase: 'scheduled',
++      retryCount: notice.retryCount,
++      delayMs: notice.delayMs,
++      retryAt: notice.retryAt,
++      category: notice.reason.category,
++    }),
++    onAttemptStart: ({ retryCount }) => lifecycle.push(`start:${retryCount}`),
++  });
++
++  assert.equal(result, 'done');
++  assert.deepEqual(lifecycle, [
++    'run:0',
++    { phase: 'scheduled', retryCount: 1, delayMs: 30_000, retryAt: 31_000, category: 'http_5xx' },
++    'sleep',
++    'start:1',
++    'run:1',
++    { phase: 'scheduled', retryCount: 2, delayMs: 30_000, retryAt: 31_000, category: 'http_5xx' },
++    'sleep',
++    'start:2',
++    'run:2',
++  ]);
++});
++
++test('does not announce an attempt start when retry delay is cancelled', async () => {
++  const controller = new AbortController();
++  const starts = [];
++
++  await assert.rejects(
++    runCodexTurnWithRetry({
++      state: {},
++      signal: controller.signal,
++      runAttempt: async () => { throw new Error('network error'); },
++      sleep: async () => {
++        controller.abort();
++        const error = new Error('cancelled');
++        error.name = 'AbortError';
++        throw error;
++      },
++      onAttemptStart: (notice) => starts.push(notice),
++    }),
++    (error) => error?.name === 'AbortError',
++  );
++
++  assert.deepEqual(starts, []);
++});
++
++test('does not retry HTTP 400, 401, or 403', async () => {
++  for (const status of [400, 401, 403]) {
++    let attempts = 0;
++    await assert.rejects(
++      runCodexTurnWithRetry({
++        state: {},
++        runAttempt: async () => {
++          attempts += 1;
++          throw new CodexTurnFailure(`HTTP ${status}`, { status });
++        },
++        sleep: async () => assert.fail('terminal failure must not sleep'),
++      }),
++      (error) => error.details.status === status,
++    );
++    assert.equal(attempts, 1);
++  }
++});
++
++test('does not retry a stream error after turn.completed', async () => {
++  const state = { turnCompleted: false };
++  let attempts = 0;
++  const postCompletionError = new Error('socket closed after completion');
++
++  await assert.rejects(
++    runCodexTurnWithRetry({
++      state,
++      runAttempt: async () => {
++        attempts += 1;
++        state.turnCompleted = true;
++        throw postCompletionError;
++      },
++      sleep: async () => { throw new Error('retry delay must not start'); },
++    }),
++    (error) => error === postCompletionError,
++  );
++  assert.equal(attempts, 1);
++});
++
++test('resets attempt-local flags while preserving logical output state', async () => {
++  const emittedToolUseIds = new Set(['tool-1']);
++  const state = {
++    turnStarted: true,
++    turnCompleted: false,
++    turnUsageBaseline: { input_tokens: 10 },
++    latestTotalTokenUsage: { input_tokens: 20 },
++    commandApprovalAbortRequested: false,
++    currentThreadId: 'thread-preserved',
++    assistantText: 'partial output',
++    emittedToolUseIds,
++  };
++  let attempts = 0;
++
++  await runCodexTurnWithRetry({
++    state,
++    runAttempt: async () => {
++      attempts += 1;
++      if (attempts === 1) throw new Error('socket hang up');
++      assert.equal(state.turnStarted, false);
++      assert.equal(state.turnCompleted, false);
++      assert.equal(state.turnUsageBaseline, null);
++      assert.equal(state.latestTotalTokenUsage, null);
++      assert.equal(state.currentThreadId, 'thread-preserved');
++      assert.equal(state.assistantText, 'partial output');
++      assert.equal(state.emittedToolUseIds, emittedToolUseIds);
++    },
++    sleep: async () => {},
++  });
++});
++
++test('cancels while waiting for the next attempt', async () => {
++  const controller = new AbortController();
++  let attempts = 0;
++
++  await assert.rejects(
++    runCodexTurnWithRetry({
++      state: {},
++      signal: controller.signal,
++      runAttempt: async () => {
++        attempts += 1;
++        throw new Error('network error');
++      },
++      onRetry: () => controller.abort(),
++    }),
++    (error) => error?.name === 'AbortError',
++  );
++  assert.equal(attempts, 1);
++});
++
++test('cancels the active attempt and never retries cancellation', async () => {
++  const controller = new AbortController();
++  let attempts = 0;
++
++  const running = runCodexTurnWithRetry({
++    state: {},
++    signal: controller.signal,
++    runAttempt: ({ turnAbortController }) => new Promise((resolve, reject) => {
++      attempts += 1;
++      turnAbortController.signal.addEventListener('abort', () => {
++        const error = new Error('active turn aborted');
++        error.name = 'AbortError';
++        reject(error);
++      }, { once: true });
++    }),
++  });
++  controller.abort();
++
++  await assert.rejects(running, (error) => error?.name === 'AbortError');
++  assert.equal(attempts, 1);
++});
+diff --git a/ai-bridge/services/codex/message-service.js b/ai-bridge/services/codex/message-service.js
+index 9d2967b726d00ed67fb95aaee8f53da5f5078112..6209305b7a88322725247a30dc49d4642d3b7195 100644
+--- a/ai-bridge/services/codex/message-service.js
++++ b/ai-bridge/services/codex/message-service.js
+@@ -34,6 +34,95 @@ import {
+   prepareSessionReplayBoundary,
+   processCodexEventStream,
+ } from './codex-event-handler.js';
++import {
++  resolveCodexInactivityTimeoutMs,
++  runCodexTurnWithRetry,
++  withCodexInactivityTimeout,
++} from './codex-retry.js';
++
++function withCodexEventInactivityWatchdog(events, options) {
++  if (!events || typeof events[Symbol.asyncIterator] !== 'function') return events;
++
++  return {
++    async *[Symbol.asyncIterator]() {
++      const iterator = events[Symbol.asyncIterator]();
++      try {
++        while (true) {
++          const result = await withCodexInactivityTimeout(iterator.next(), options);
++          if (result.done) return;
++          yield result.value;
++        }
++      } finally {
++        const closing = iterator.return?.();
++        closing?.catch?.(() => {});
++      }
++    },
++  };
++}
++
++function emitCodexRetryState(payload) {
++  process.stdout.write(`[CODEX_RETRY] ${JSON.stringify(payload)}\n`);
++}
++
++export async function runCodexMessageAttempts({
++  thread,
++  runInput,
++  state,
++  config,
++  signal,
++  processEvents = processCodexEventStream,
++  prepareReplayBoundary = prepareSessionReplayBoundary,
++  sleep,
++  inactivityTimeoutMs,
++  inactivityTimers,
++  onStreamStart,
++  onRetry,
++  onAttemptStart,
++  now,
++}) {
++  let streamStarted = false;
++  const resolvedInactivityTimeoutMs = resolveCodexInactivityTimeoutMs(
++    inactivityTimeoutMs ?? process.env.CCGUI_CODEX_INACTIVITY_TIMEOUT_MS,
++  );
++  emitCodexRetryState({ phase: 'attempt_started', retryCount: 0 });
++  await runCodexTurnWithRetry({
++    state,
++    signal,
++    sleep,
++    now,
++    onRetry: ({ error, retryCount, delayMs, retryAt, reason }) => {
++      emitCodexRetryState({ phase: 'scheduled', retryCount, delayMs, retryAt, reason });
++      onRetry?.({ error, retryCount, delayMs, retryAt, reason });
++    },
++    onAttemptStart: ({ retryCount }) => {
++      emitCodexRetryState({ phase: 'attempt_started', retryCount });
++      onAttemptStart?.({ retryCount });
++    },
++    runAttempt: async ({ turnAbortController, retryCount }) => {
++      if (retryCount > 0) {
++        await prepareReplayBoundary(state, state.currentThreadId || config.threadId || null);
++      }
++      const { events } = await withCodexInactivityTimeout(
++        thread.runStreamed(runInput, { signal: turnAbortController.signal }),
++        {
++          timeoutMs: resolvedInactivityTimeoutMs,
++          turnAbortController,
++          timers: inactivityTimers,
++        },
++      );
++      if (!streamStarted) {
++        streamStarted = true;
++        onStreamStart?.();
++      }
++      const watchedEvents = withCodexEventInactivityWatchdog(events, {
++        timeoutMs: resolvedInactivityTimeoutMs,
++        turnAbortController,
++        timers: inactivityTimers,
++      });
++      await processEvents(watchedEvents, state, { ...config, turnAbortController });
++    },
++  });
++}
+ 
+ // ---------------------------------------------------------------------------
+ // sendMessage
+@@ -260,13 +349,6 @@ export async function sendMessage(
+     const state = createInitialEventState(emitMessage);
+     await prepareSessionReplayBoundary(state, threadId);
+ 
+-    const turnAbortController = new AbortController();
+-    const { events } = await thread.runStreamed(runInput, {
+-      signal: turnAbortController.signal
+-    });
+-    console.log('[STREAM_START]');
+-    streamStarted = true;
+-
+     // ============================================================
+     // 7. Delegate Event Processing to codex-event-handler
+     // ============================================================
+@@ -276,12 +358,21 @@ export async function sendMessage(
+       threadId,
+       threadOptions,
+       normalizedPermissionMode,
+-      turnAbortController,
+-      onTurnCompleted: emitStreamEndOnce,
+-      onTurnFailed: emitStreamEndOnce
++      onTurnCompleted: emitStreamEndOnce
+     };
+ 
+-    await processCodexEventStream(events, state, config);
++    const operationAbortController = new AbortController();
++    await runCodexMessageAttempts({
++      thread,
++      runInput,
++      state,
++      config,
++      signal: operationAbortController.signal,
++      onStreamStart: () => {
++        console.log('[STREAM_START]');
++        streamStarted = true;
++      },
++    });
+     emitStreamEndOnce();
+ 
+     // ============================================================
+diff --git a/ai-bridge/services/codex/message-service.retry.test.js b/ai-bridge/services/codex/message-service.retry.test.js
+new file mode 100644
+index 0000000000000000000000000000000000000000..bae30ec62c89becb2f6854be2397f531c0703c21
+--- /dev/null
++++ b/ai-bridge/services/codex/message-service.retry.test.js
+@@ -0,0 +1,308 @@
++import test from 'node:test';
++import assert from 'node:assert/strict';
++import { readFileSync } from 'node:fs';
++import { runCodexMessageAttempts } from './message-service.js';
++import { CodexTurnFailure } from './codex-retry.js';
++
++async function captureStdout(fn) {
++  const original = process.stdout.write.bind(process.stdout);
++  const captured = [];
++  process.stdout.write = (chunk) => {
++    captured.push(typeof chunk === 'string' ? chunk : chunk.toString());
++    return true;
++  };
++  try {
++    await fn(captured);
++  } finally {
++    process.stdout.write = original;
++  }
++  return captured;
++}
++
++function retryPayloads(captured) {
++  return captured
++    .filter((line) => line.startsWith('[CODEX_RETRY] '))
++    .map((line) => JSON.parse(line.slice('[CODEX_RETRY] '.length)));
++}
++
++test('main send path does not expose raw retry errors through status messages', () => {
++  const source = readFileSync(new URL('./message-service.js', import.meta.url), 'utf8');
++  const sendMessageSource = source.slice(source.indexOf('export async function sendMessage'));
++
++  assert.doesNotMatch(sendMessageSource, /onRetry:\s*\(\{\s*error/);
++  assert.doesNotMatch(sendMessageSource, /Codex request failed \(\$\{reason\}\)/);
++});
++
++test('emits the initial attempt state before invoking the Codex SDK', async () => {
++  const captured = await captureStdout(async (lines) => {
++    await runCodexMessageAttempts({
++      thread: {
++        async runStreamed() {
++          assert.deepEqual(retryPayloads(lines), [
++            { phase: 'attempt_started', retryCount: 0 },
++          ]);
++          return { events: [] };
++        },
++      },
++      runInput: 'start visibly',
++      state: {},
++      config: {},
++      processEvents: async () => {},
++    });
++  });
++
++  assert.deepEqual(retryPayloads(captured), [
++    { phase: 'attempt_started', retryCount: 0 },
++  ]);
++});
++
++test('emits safe scheduled and attempt-started retry lifecycle lines', async () => {
++  const order = [];
++  let attempts = 0;
++  const nestedSecret = 'nested-response-secret';
++  const thread = {
++    async runStreamed() {
++      attempts += 1;
++      order.push(`run:${attempts}`);
++      if (attempts === 1) {
++        throw new CodexTurnFailure('HTTP 503\nAuthorization: Bearer top-secret', {
++          status: 503,
++          response: { body: nestedSecret },
++        });
++      }
++      return { events: [] };
++    },
++  };
++
++  const captured = await captureStdout(async (lines) => {
++    await runCodexMessageAttempts({
++      thread,
++      runInput: 'retry me',
++      state: {},
++      config: {},
++      processEvents: async () => {},
++      now: () => 1_000,
++      sleep: async (delayMs) => {
++        order.push(`sleep:${delayMs}`);
++        const scheduled = retryPayloads(lines).at(-1);
++        assert.equal(scheduled.phase, 'scheduled');
++      },
++      onAttemptStart: ({ retryCount }) => order.push(`callback:${retryCount}`),
++    });
++  });
++
++  const payloads = retryPayloads(captured);
++  assert.deepEqual(payloads, [
++    { phase: 'attempt_started', retryCount: 0 },
++    {
++      phase: 'scheduled',
++      retryCount: 1,
++      delayMs: 30_000,
++      retryAt: 31_000,
++      reason: {
++        category: 'http_5xx',
++        status: 503,
++      },
++    },
++    { phase: 'attempt_started', retryCount: 1 },
++  ]);
++  assert.deepEqual(order, ['run:1', 'sleep:30000', 'callback:1', 'run:2']);
++  assert.equal(captured.join('').includes('top-secret'), false);
++  assert.equal(captured.join('').includes(nestedSecret), false);
++});
++
++test('keeps one logical stream open across a retry and reuses the thread input', async () => {
++  const runCalls = [];
++  const attemptControllers = [];
++  const retryNotices = [];
++  const replayBoundaries = [];
++  let streamStarts = 0;
++  let streamEnds = 0;
++  let processCalls = 0;
++  const runInput = [{ type: 'text', text: 'continue this task' }];
++  const state = { currentThreadId: 'thread-1' };
++  const thread = {
++    async runStreamed(input, options) {
++      runCalls.push(input);
++      attemptControllers.push(options.signal);
++      return { events: { attempt: runCalls.length } };
++    },
++  };
++
++  await runCodexMessageAttempts({
++    thread,
++    runInput,
++    state,
++    config: { onTurnCompleted: () => { streamEnds += 1; } },
++    processEvents: async (events, receivedState, config) => {
++      processCalls += 1;
++      assert.equal(receivedState, state);
++      assert.equal(events.attempt, processCalls);
++      assert.equal(config.turnAbortController.signal, attemptControllers.at(-1));
++      if (processCalls === 1) {
++        throw new CodexTurnFailure('HTTP 503', { status: 503 });
++      }
++      config.onTurnCompleted();
++    },
++    sleep: async (ms) => assert.equal(ms, 30_000),
++    onStreamStart: () => { streamStarts += 1; },
++    onRetry: (notice) => retryNotices.push(notice),
++    prepareReplayBoundary: async (receivedState, threadId) => {
++      assert.equal(receivedState, state);
++      replayBoundaries.push(threadId);
++    },
++  });
++
++  assert.equal(runCalls.length, 2);
++  assert.equal(runCalls[0], runInput);
++  assert.equal(runCalls[1], runInput);
++  assert.notEqual(attemptControllers[0], attemptControllers[1]);
++  assert.equal(streamStarts, 1);
++  assert.equal(streamEnds, 1);
++  assert.equal(retryNotices.length, 1);
++  assert.deepEqual(replayBoundaries, ['thread-1']);
++  assert.equal(state.currentThreadId, 'thread-1');
++});
++
++test('retries a transport failure thrown before event processing starts', async () => {
++  let runCalls = 0;
++  let processCalls = 0;
++  let streamStarts = 0;
++  const thread = {
++    async runStreamed() {
++      runCalls += 1;
++      if (runCalls === 1) throw Object.assign(new Error('fetch failed'), { code: 'ECONNREFUSED' });
++      return { events: [] };
++    },
++  };
++
++  await runCodexMessageAttempts({
++    thread,
++    runInput: 'retry me',
++    state: {},
++    config: {},
++    processEvents: async () => { processCalls += 1; },
++    sleep: async () => {},
++    onStreamStart: () => { streamStarts += 1; },
++  });
++
++  assert.equal(runCalls, 2);
++  assert.equal(processCalls, 1);
++  assert.equal(streamStarts, 1);
++});
++
++test('passes a daily usage limit through without emitting retry progress', async () => {
++  let runCalls = 0;
++  const terminalError = new CodexTurnFailure('daily usage limit exceeded', {
++    type: 'turn.failed',
++    error: {
++      status: 429,
++      reason: 'DAYLY\u2014LIMIT\u2014EXCEEDED',
++      message: 'daily usage limit exceeded',
++    },
++  });
++  const thread = {
++    async runStreamed() {
++      runCalls += 1;
++      throw terminalError;
++    },
++  };
++
++  const captured = await captureStdout(async () => {
++    await assert.rejects(
++      runCodexMessageAttempts({
++        thread,
++        runInput: 'stop at the daily limit',
++        state: {},
++        config: {},
++        processEvents: async () => {},
++        sleep: async () => assert.fail('daily limit failure must not sleep'),
++      }),
++      (error) => error === terminalError,
++    );
++  });
++
++  assert.equal(runCalls, 1);
++  assert.deepEqual(retryPayloads(captured), [
++    { phase: 'attempt_started', retryCount: 0 },
++  ]);
++});
++
++test('retries when the SDK event iterator remains inactive', async () => {
++  const delays = [];
++  const retryNotices = [];
++  const timerDelays = [];
++  const pendingTimers = new Map();
++  let nextTimerId = 1;
++  let runCalls = 0;
++  let firstAttemptSignal;
++  const timers = {
++    setTimeout(callback, delay) {
++      const id = nextTimerId++;
++      timerDelays.push(delay);
++      pendingTimers.set(id, callback);
++      return id;
++    },
++    clearTimeout(id) {
++      pendingTimers.delete(id);
++    },
++  };
++  const thread = {
++    async runStreamed(_input, options) {
++      runCalls += 1;
++      if (runCalls === 1) {
++        firstAttemptSignal = options.signal;
++        return {
++          events: {
++            [Symbol.asyncIterator]() {
++              return {
++                next: () => new Promise((resolve, reject) => {
++                  options.signal.addEventListener('abort', () => reject(options.signal.reason), { once: true });
++                }),
++                return: async () => ({ done: true }),
++              };
++            },
++          },
++        };
++      }
++      return {
++        events: {
++          async *[Symbol.asyncIterator]() {
++            yield { type: 'turn.started' };
++          },
++        },
++      };
++    },
++  };
++
++  const running = runCodexMessageAttempts({
++    thread,
++    runInput: 'retry inactive stream',
++    state: {},
++    config: {},
++    processEvents: async (events) => {
++      for await (const _event of events) {
++        // Consuming the iterable is the behavior under test.
++      }
++    },
++    inactivityTimeoutMs: 5_000,
++    inactivityTimers: timers,
++    sleep: async (ms) => delays.push(ms),
++    onRetry: (notice) => retryNotices.push(notice),
++  });
++
++  await new Promise(setImmediate);
++  assert.equal(runCalls, 1);
++  assert.equal(pendingTimers.size, 1);
++  pendingTimers.values().next().value();
++  await running;
++
++  assert.equal(firstAttemptSignal.aborted, true);
++  assert.equal(firstAttemptSignal.reason?.code, 'CODEX_STREAM_INACTIVITY_TIMEOUT');
++  assert.equal(runCalls, 2);
++  assert.deepEqual(delays, [30_000]);
++  assert.equal(retryNotices.length, 1);
++  assert.ok(timerDelays.length >= 4);
++  assert.deepEqual(new Set(timerDelays), new Set([5_000]));
++  assert.equal(pendingTimers.size, 0);
++});
+diff --git a/src/main/java/com/github/claudecodegui/provider/codex/CodexSDKBridge.java b/src/main/java/com/github/claudecodegui/provider/codex/CodexSDKBridge.java
+index 87afb53d00a1e7a3d0148ca3c80af32502091fa4..4866efbaaf78409fd75aa735283cdf90659fc580 100644
+--- a/src/main/java/com/github/claudecodegui/provider/codex/CodexSDKBridge.java
++++ b/src/main/java/com/github/claudecodegui/provider/codex/CodexSDKBridge.java
+@@ -192,6 +192,8 @@ public class CodexSDKBridge extends BaseSDKBridge {
+             callback.onMessage("stream_end", "");
+         } else if (line.startsWith("[MESSAGE_END]")) {
+             callback.onMessage("message_end", "");
++        } else if (line.startsWith("[CODEX_RETRY]")) {
++            callback.onMessage("codex_retry", line.substring("[CODEX_RETRY]".length()).trim());
+         } else if (line.startsWith("[THREAD_ID]")) {
+             String receivedThreadId = line.substring("[THREAD_ID]".length()).trim();
+             callback.onMessage("session_id", receivedThreadId);
+diff --git a/src/main/java/com/github/claudecodegui/session/CallbackHandler.java b/src/main/java/com/github/claudecodegui/session/CallbackHandler.java
+index 28c819ddcf702e045dfd77abcad9dd43f1cb1179..432843c4f8ce4787c64e880f23d3c036f589a5b3 100644
+--- a/src/main/java/com/github/claudecodegui/session/CallbackHandler.java
++++ b/src/main/java/com/github/claudecodegui/session/CallbackHandler.java
+@@ -42,6 +42,12 @@ public class CallbackHandler {
+         }
+     }
+ 
++    public void notifyCodexRetryState(String stateJson) {
++        if (callback != null) {
++            callback.onCodexRetryState(stateJson);
++        }
++    }
++
+     /**
+      * Notify that a session ID was received.
+      */
+diff --git a/src/main/java/com/github/claudecodegui/session/ClaudeSession.java b/src/main/java/com/github/claudecodegui/session/ClaudeSession.java
+index 941f46118eb1f987b99e79839a0d1169f137684f..7514fdf2cf39c525aca58f0d73a07ecc736a82da 100644
+--- a/src/main/java/com/github/claudecodegui/session/ClaudeSession.java
++++ b/src/main/java/com/github/claudecodegui/session/ClaudeSession.java
+@@ -114,6 +114,9 @@ public class ClaudeSession {
+         default void onStatusMessage(String message) {
+         }
+ 
++        default void onCodexRetryState(String stateJson) {
++        }
++
+         void onSessionIdReceived(String sessionId);
+ 
+         void onPermissionRequested(PermissionRequest request);
+diff --git a/src/main/java/com/github/claudecodegui/session/CodexMessageHandler.java b/src/main/java/com/github/claudecodegui/session/CodexMessageHandler.java
+index 42c2b8e9f8b7f0d313e74fdb09cbdaf52c525c27..0abbcafac56239a545b4d5ebb24958b705719004 100644
+--- a/src/main/java/com/github/claudecodegui/session/CodexMessageHandler.java
++++ b/src/main/java/com/github/claudecodegui/session/CodexMessageHandler.java
+@@ -8,8 +8,12 @@ import com.github.claudecodegui.util.UsageCostCalculator;
+ import com.google.gson.JsonArray;
+ import com.google.gson.JsonElement;
+ import com.google.gson.JsonObject;
++import com.google.gson.JsonParser;
+ import com.intellij.openapi.diagnostic.Logger;
+ 
++import java.math.BigDecimal;
++import java.util.Set;
++
+ /**
+  * Codex message callback handler.
+  * Processes messages returned by Codex AI.
+@@ -21,6 +25,16 @@ public class CodexMessageHandler implements MessageCallback {
+      * log.
+      */
+     private static final Logger LOG = Logger.getInstance(CodexMessageHandler.class);
++    private static final long MAX_SAFE_JS_INTEGER = 9_007_199_254_740_991L;
++    private static final Set<String> RETRY_CATEGORIES = Set.of(
++            "capacity", "rate_limit", "http_5xx", "network", "inactivity", "retryable_error");
++    private static final Set<String> SAFE_RETRY_CODES = Set.of(
++            "ECONNRESET", "ECONNREFUSED", "EPIPE", "ETIMEDOUT", "ENETDOWN", "ENETRESET",
++            "ENETUNREACH", "EHOSTDOWN", "EHOSTUNREACH", "ENOTFOUND", "EAI_AGAIN",
++            "UND_ERR_CONNECT_TIMEOUT", "UND_ERR_HEADERS_TIMEOUT", "UND_ERR_BODY_TIMEOUT",
++            "UND_ERR_SOCKET", "CODEX_STREAM_INACTIVITY_TIMEOUT", "MODEL_AT_CAPACITY",
++            "RATE_LIMIT_EXCEEDED", "SERVER_ERROR", "INTERNAL_SERVER_ERROR",
++            "SERVICE_UNAVAILABLE", "BAD_GATEWAY", "GATEWAY_TIMEOUT");
+ 
+     /**
+      * state.
+@@ -112,6 +126,8 @@ public class CodexMessageHandler implements MessageCallback {
+             if (content != null && !content.trim().isEmpty()) {
+                 callbackHandler.notifyStatusMessage(content);
+             }
++        } else if ("codex_retry".equals(type)) {
++            handleCodexRetryState(content);
+         } else if ("message_end".equals(type)) {
+             handleMessageEnd();
+         } else {
+@@ -187,6 +203,105 @@ public class CodexMessageHandler implements MessageCallback {
+ 
+     // ===== Private methods =====
+ 
++    private void handleCodexRetryState(String content) {
++        String normalized = normalizeCodexRetryState(content);
++        if (normalized != null) {
++            callbackHandler.notifyCodexRetryState(normalized);
++        }
++    }
++
++    static String normalizeCodexRetryState(String content) {
++        try {
++            JsonElement parsed = JsonParser.parseString(content);
++            if (!parsed.isJsonObject()) {
++                return null;
++            }
++            JsonObject input = parsed.getAsJsonObject();
++            String phase = requiredString(input, "phase");
++            if (phase == null) {
++                return null;
++            }
++            long minimumRetryCount = "attempt_started".equals(phase) ? 0 : 1;
++            Long retryCount = requiredInteger(input, "retryCount", minimumRetryCount, Integer.MAX_VALUE);
++            if (retryCount == null) {
++                return null;
++            }
++
++            JsonObject normalized = new JsonObject();
++            normalized.addProperty("phase", phase);
++            normalized.addProperty("retryCount", retryCount);
++            if ("attempt_started".equals(phase)) {
++                return normalized.toString();
++            }
++            if (!"scheduled".equals(phase)) {
++                return null;
++            }
++
++            Long delayMs = requiredInteger(input, "delayMs", 1, 3_600_000);
++            Long retryAt = requiredInteger(input, "retryAt", 1, MAX_SAFE_JS_INTEGER);
++            if (delayMs == null || retryAt == null || !input.has("reason")
++                    || !input.get("reason").isJsonObject()) {
++                return null;
++            }
++            JsonObject reason = normalizeRetryReason(input.getAsJsonObject("reason"));
++            if (reason == null) {
++                return null;
++            }
++            normalized.addProperty("delayMs", delayMs);
++            normalized.addProperty("retryAt", retryAt);
++            normalized.add("reason", reason);
++            return normalized.toString();
++        } catch (Exception ignored) {
++            return null;
++        }
++    }
++
++    private static JsonObject normalizeRetryReason(JsonObject input) {
++        String category = requiredString(input, "category");
++        if (category == null || !RETRY_CATEGORIES.contains(category)) {
++            return null;
++        }
++        JsonObject normalized = new JsonObject();
++        normalized.addProperty("category", category);
++
++        if (input.has("status")) {
++            Long status = requiredInteger(input, "status", 100, 599);
++            if (status == null) {
++                return null;
++            }
++            normalized.addProperty("status", status);
++        }
++        if (input.has("code")) {
++            String code = requiredString(input, "code");
++            if (code != null && SAFE_RETRY_CODES.contains(code)) {
++                normalized.addProperty("code", code);
++            }
++        }
++        return normalized;
++    }
++
++    private static String requiredString(JsonObject input, String name) {
++        if (!input.has(name) || !input.get(name).isJsonPrimitive()
++                || !input.getAsJsonPrimitive(name).isString()) {
++            return null;
++        }
++        String value = input.get(name).getAsString();
++        return value.isEmpty() ? null : value;
++    }
++
++    private static Long requiredInteger(JsonObject input, String name, long min, long max) {
++        if (!input.has(name) || !input.get(name).isJsonPrimitive()
++                || !input.getAsJsonPrimitive(name).isNumber()) {
++            return null;
++        }
++        BigDecimal value = input.get(name).getAsBigDecimal();
++        if (value.stripTrailingZeros().scale() > 0) {
++            return null;
++        }
++        long number = value.longValueExact();
++        return number >= min && number <= max ? number : null;
++    }
++
+     /**
+      * Handle a complete assistant message in JSON format.
+      * Contains thinking, tool_use, text, and other content types.
+diff --git a/src/main/java/com/github/claudecodegui/session/SessionCallbackAdapter.java b/src/main/java/com/github/claudecodegui/session/SessionCallbackAdapter.java
+index 3af159f3bf60445e1787e22a23259799b0cf0f98..4fabea6ff60971c2eb99d0b94c5050c2efe9dedc 100644
+--- a/src/main/java/com/github/claudecodegui/session/SessionCallbackAdapter.java
++++ b/src/main/java/com/github/claudecodegui/session/SessionCallbackAdapter.java
+@@ -3,6 +3,9 @@ package com.github.claudecodegui.session;
+ import com.github.claudecodegui.handler.PermissionHandler;
+ import com.github.claudecodegui.permission.PermissionRequest;
+ import com.github.claudecodegui.util.JsUtils;
++import com.google.gson.JsonArray;
++import com.google.gson.JsonElement;
++import com.google.gson.JsonObject;
+ import com.intellij.openapi.application.ApplicationManager;
+ import com.intellij.openapi.diagnostic.Logger;
+ import com.intellij.openapi.vfs.VirtualFileManager;
+@@ -42,6 +45,7 @@ public class SessionCallbackAdapter implements ClaudeSession.SessionCallback {
+     private final Object lifecycleLock = new Object();
+     /** Guards against duplicate onStreamEnd delivery from dual-path dispatch. */
+     private volatile boolean streamEndSignalSent = false;
++    private volatile String retainedCodexRetryState;
+ 
+     public SessionCallbackAdapter(
+             StreamMessageCoalescer streamCoalescer,
+@@ -77,6 +81,7 @@ public class SessionCallbackAdapter implements ClaudeSession.SessionCallback {
+     public void deactivate() {
+         synchronized (lifecycleLock) {
+             active = false;
++            clearRetainedCodexRetryState();
+         }
+         contentDeltaThrottler.dispose();
+         thinkingDeltaThrottler.dispose();
+@@ -95,15 +100,119 @@ public class SessionCallbackAdapter implements ClaudeSession.SessionCallback {
+             if (!active) {
+                 return;
+             }
++            if (hasVisibleCodexOutput(messages)) {
++                clearRetainedCodexRetryState();
++            }
+             streamCoalescer.enqueue(messages);
+         }
+     }
+ 
++    static boolean hasVisibleCodexOutput(List<ClaudeSession.Message> messages) {
++        if (messages == null || messages.isEmpty()) {
++            return false;
++        }
++
++        int currentTurnStart = 0;
++        for (int index = messages.size() - 1; index >= 0; index--) {
++            ClaudeSession.Message message = messages.get(index);
++            if (message.type == ClaudeSession.Message.Type.USER && !isToolResultMessage(message)) {
++                currentTurnStart = index + 1;
++                break;
++            }
++        }
++
++        for (int index = currentTurnStart; index < messages.size(); index++) {
++            ClaudeSession.Message message = messages.get(index);
++            if (message.type == ClaudeSession.Message.Type.ERROR && hasText(message.content)) {
++                return true;
++            }
++            if (isToolResultMessage(message)) {
++                return true;
++            }
++            if (message.type != ClaudeSession.Message.Type.ASSISTANT) {
++                continue;
++            }
++            if (hasText(message.content)) {
++                return true;
++            }
++            JsonArray blocks = contentBlocks(message.raw);
++            if (blocks == null) {
++                continue;
++            }
++            for (JsonElement element : blocks) {
++                if (!element.isJsonObject()) {
++                    continue;
++                }
++                JsonObject block = element.getAsJsonObject();
++                String type = stringValue(block, "type");
++                if ("tool_use".equals(type) || "tool_result".equals(type)) {
++                    return true;
++                }
++                if ("text".equals(type) && hasText(stringValue(block, "text"))) {
++                    return true;
++                }
++                if ("thinking".equals(type)
++                        && (hasText(stringValue(block, "thinking")) || hasText(stringValue(block, "text")))) {
++                    return true;
++                }
++            }
++        }
++        return false;
++    }
++
++    private static boolean isToolResultMessage(ClaudeSession.Message message) {
++        if (message.type != ClaudeSession.Message.Type.USER) {
++            return false;
++        }
++        if ("[tool_result]".equals(message.content)) {
++            return true;
++        }
++        JsonArray blocks = contentBlocks(message.raw);
++        if (blocks == null) {
++            return false;
++        }
++        for (JsonElement element : blocks) {
++            if (element.isJsonObject()
++                    && "tool_result".equals(stringValue(element.getAsJsonObject(), "type"))) {
++                return true;
++            }
++        }
++        return false;
++    }
++
++    private static JsonArray contentBlocks(JsonObject raw) {
++        if (raw == null) {
++            return null;
++        }
++        JsonElement content = null;
++        if (raw.has("message") && raw.get("message").isJsonObject()) {
++            content = raw.getAsJsonObject("message").get("content");
++        }
++        if (content == null) {
++            content = raw.get("content");
++        }
++        return content != null && content.isJsonArray() ? content.getAsJsonArray() : null;
++    }
++
++    private static String stringValue(JsonObject object, String name) {
++        JsonElement value = object.get(name);
++        return value != null && value.isJsonPrimitive() && value.getAsJsonPrimitive().isString()
++                ? value.getAsString()
++                : null;
++    }
++
++    private static boolean hasText(String value) {
++        return value != null && !value.trim().isEmpty();
++    }
++
+     @Override
+     public void onStateChange(boolean busy, boolean loading, String error) {
+         if (isInactive()) {
+             return;
+         }
++        if (!loading || (error != null && !error.isEmpty())) {
++            clearRetainedCodexRetryState();
++        }
+         ApplicationManager.getApplication().invokeLater(() -> {
+             if (isInactive()) {
+                 return;
+@@ -140,6 +249,28 @@ public class SessionCallbackAdapter implements ClaudeSession.SessionCallback {
+         });
+     }
+ 
++    @Override
++    public void onCodexRetryState(String stateJson) {
++        if (isInactive() || stateJson == null || stateJson.trim().isEmpty()) {
++            return;
++        }
++        if (stateJson.contains("\"phase\":\"scheduled\"")
++                || stateJson.contains("\"phase\":\"attempt_started\"")) {
++            retainedCodexRetryState = stateJson;
++        } else {
++            clearRetainedCodexRetryState();
++        }
++        jsTarget.callJavaScript("onCodexRetryState", JsUtils.escapeJs(stateJson));
++    }
++
++    public String getRetainedCodexRetryState() {
++        return retainedCodexRetryState;
++    }
++
++    void clearRetainedCodexRetryState() {
++        retainedCodexRetryState = null;
++    }
++
+     @Override
+     public void onSessionIdReceived(String sessionId) {
+         if (isInactive()) {
+@@ -243,6 +374,7 @@ public class SessionCallbackAdapter implements ClaudeSession.SessionCallback {
+         if (isInactive()) {
+             return;
+         }
++        clearRetainedCodexRetryState();
+         // Reset the signal guard so this turn's dual-path dispatch can proceed.
+         // Thread-safety: this runs on the process reader thread; the callbacks that
+         // read/write streamEndSignalSent all run on EDT (via invokeLater or Alarm).
+@@ -327,6 +459,9 @@ public class SessionCallbackAdapter implements ClaudeSession.SessionCallback {
+         if (isInactive()) {
+             return;
+         }
++        if (delta != null && !delta.isEmpty()) {
++            clearRetainedCodexRetryState();
++        }
+         contentDeltaThrottler.append(delta);
+     }
+ 
+@@ -335,6 +470,9 @@ public class SessionCallbackAdapter implements ClaudeSession.SessionCallback {
+         if (isInactive()) {
+             return;
+         }
++        if (delta != null && !delta.isEmpty()) {
++            clearRetainedCodexRetryState();
++        }
+         thinkingDeltaThrottler.append(delta);
+     }
+ 
+diff --git a/src/main/java/com/github/claudecodegui/ui/ChatWindowDelegate.java b/src/main/java/com/github/claudecodegui/ui/ChatWindowDelegate.java
+index 6c53c571e3ebacafd69c7145631806eed1847047..50645112aff384cc8cdcb62e34f04e0a8acf1735 100644
+--- a/src/main/java/com/github/claudecodegui/ui/ChatWindowDelegate.java
++++ b/src/main/java/com/github/claudecodegui/ui/ChatWindowDelegate.java
+@@ -107,6 +107,7 @@ public class ChatWindowDelegate {
+         void interruptDueToPermissionDenial();
+         boolean isFrontendReady();
+         boolean isRuntimeRecoveryPage();
++        String getRetainedCodexRetryState();
+         void setFrontendReady(boolean ready);
+         void onHistoryRenderComplete(long commitEpoch);
+         void onSurfaceDamageApplied(String token, String phase, boolean applied);
+@@ -742,6 +743,11 @@ public class ChatWindowDelegate {
+                 host.callJavaScript("onStreamStart", "replay");
+             }
+ 
++            String retainedRetryState = host.getRetainedCodexRetryState();
++            if (retainedRetryState != null && !retainedRetryState.trim().isEmpty()) {
++                host.callJavaScript("onCodexRetryState", JsUtils.escapeJs(retainedRetryState));
++            }
++
+             LOG.info("Replayed current session state to frontend: sessionId="
+                     + (sessionId != null ? sessionId : "(none)")
+                     + ", messages=" + messages.size()
+diff --git a/src/main/java/com/github/claudecodegui/ui/toolwindow/ClaudeChatWindow.java b/src/main/java/com/github/claudecodegui/ui/toolwindow/ClaudeChatWindow.java
+index a744725961bbfcdc834121a778d9025872d957a3..1c474ad3a891c3a9765883640fd70ea064882864 100644
+--- a/src/main/java/com/github/claudecodegui/ui/toolwindow/ClaudeChatWindow.java
++++ b/src/main/java/com/github/claudecodegui/ui/toolwindow/ClaudeChatWindow.java
+@@ -3119,6 +3119,13 @@ public class ClaudeChatWindow {
+                 return webviewInitializer.isRuntimeRecoveryPage();
+             }
+ 
++            @Override
++            public String getRetainedCodexRetryState() {
++                return sessionCallbackAdapter != null
++                        ? sessionCallbackAdapter.getRetainedCodexRetryState()
++                        : null;
++            }
++
+             @Override
+             public void setFrontendReady(boolean ready) {
+                 updateFrontendReadyState(ready);
+diff --git a/src/test/java/com/github/claudecodegui/provider/codex/CodexSDKBridgeProtocolTest.java b/src/test/java/com/github/claudecodegui/provider/codex/CodexSDKBridgeProtocolTest.java
+index 9509cd8daf5e918f08e75c49dffaa2188a9b1a69..a264cc63f9b097fe1e47b4066bde9e16e4c58655 100644
+--- a/src/test/java/com/github/claudecodegui/provider/codex/CodexSDKBridgeProtocolTest.java
++++ b/src/test/java/com/github/claudecodegui/provider/codex/CodexSDKBridgeProtocolTest.java
+@@ -38,6 +38,26 @@ public class CodexSDKBridgeProtocolTest {
+         assertTrue(result.messages.isEmpty());
+     }
+ 
++    @Test
++    public void codexRetryMarkerIsRoutedWithoutChangingResultBookkeeping() {
++        TestableCodexSDKBridge bridge = new TestableCodexSDKBridge();
++        SDKResult result = new SDKResult();
++        RecordingCallback callback = new RecordingCallback();
++
++        bridge.process(
++                "[CODEX_RETRY] {\"phase\":\"scheduled\",\"retryCount\":1,"
++                        + "\"delayMs\":30000,\"retryAt\":1700000030000,"
++                        + "\"reason\":{\"category\":\"http_5xx\",\"status\":503,"
++                        + "\"code\":\"SERVER_ERROR\"}}",
++                callback,
++                result
++        );
++
++        assertEquals("codex_retry", callback.lastType);
++        assertTrue(callback.lastContent.contains("\"phase\":\"scheduled\""));
++        assertTrue(result.messages.isEmpty());
++    }
++
+     private static final class TestableCodexSDKBridge extends CodexSDKBridge {
+         private void process(String line, MessageCallback callback, SDKResult result) {
+             processOutputLine(
+diff --git a/src/test/java/com/github/claudecodegui/session/CodexMessageHandlerTest.java b/src/test/java/com/github/claudecodegui/session/CodexMessageHandlerTest.java
+index 67147bce06614f026bb9a282b1d14051c5bc2491..4b61c37c003b2f9b3980a5076de1bda7baf41fb2 100644
+--- a/src/test/java/com/github/claudecodegui/session/CodexMessageHandlerTest.java
++++ b/src/test/java/com/github/claudecodegui/session/CodexMessageHandlerTest.java
+@@ -31,6 +31,7 @@ public class CodexMessageHandlerTest {
+         boolean lastBusy = false;
+         final List<String> contentDeltas = new ArrayList<>();
+         final List<String> thinkingDeltas = new ArrayList<>();
++        final List<String> retryStates = new ArrayList<>();
+         final List<Message> lastMessages = new ArrayList<>();
+         // Records the relative order of stream-end vs message-update callbacks so a
+         // test can assert stream-end fires BEFORE the error snapshot is pushed.
+@@ -95,6 +96,11 @@ public class CodexMessageHandlerTest {
+         public void onThinkingDelta(String delta) {
+             thinkingDeltas.add(delta);
+         }
++
++        @Override
++        public void onCodexRetryState(String stateJson) {
++            retryStates.add(stateJson);
++        }
+     }
+ 
+     @Test
+@@ -120,6 +126,44 @@ public class CodexMessageHandlerTest {
+         assertEquals("done", callback.lastMessages.get(callback.lastMessages.size() - 1).content);
+     }
+ 
++    @Test
++    public void retryStateForwardsOnlyValidatedLifecyclePayloads() {
++        SessionState state = new SessionState();
++        CallbackHandler callbackHandler = new CallbackHandler();
++        RecordingCallback callback = new RecordingCallback();
++        callbackHandler.setCallback(callback);
++
++        CodexMessageHandler handler = new CodexMessageHandler(state, callbackHandler);
++        handler.onMessage("codex_retry", "{\"phase\":\"scheduled\",\"retryCount\":1,"
++                + "\"delayMs\":30000,\"retryAt\":1700000030000,"
++                + "\"reason\":{\"category\":\"http_5xx\",\"status\":503,"
++                + "\"code\":\"SERVER_ERROR\",\"message\":\"Bearer must-not-cross\","
++                + "\"response\":{\"body\":\"must-not-cross\"}},\"extra\":\"drop-me\"}");
++        handler.onMessage("codex_retry", "{\"phase\":\"attempt_started\",\"retryCount\":1}");
++        handler.onMessage("codex_retry", "{\"phase\":\"attempt_started\",\"retryCount\":0}");
++        handler.onMessage("codex_retry", "{\"phase\":\"attempt_started\",\"retryCount\":-1}");
++        handler.onMessage("codex_retry", "{\"phase\":\"unknown\",\"retryCount\":1}");
++        handler.onMessage("codex_retry", "{\"phase\":\"scheduled\",\"retryCount\":0,"
++                + "\"delayMs\":30000,\"retryAt\":1700000030000,"
++                + "\"reason\":{\"category\":\"network\"}}");
++        handler.onMessage("codex_retry", "{\"phase\":\"scheduled\",\"retryCount\":2,"
++                + "\"delayMs\":30000,\"retryAt\":-1,"
++                + "\"reason\":{\"category\":\"network\"}}");
++        handler.onMessage("codex_retry", "{\"phase\":\"scheduled\",\"retryCount\":2,"
++                + "\"delayMs\":30000,\"retryAt\":1700000030000,"
++                + "\"reason\":{\"category\":\"raw_response\"}}");
++        handler.onMessage("codex_retry", "not-json");
++
++        assertEquals(3, callback.retryStates.size());
++        assertEquals("{\"phase\":\"scheduled\",\"retryCount\":1,\"delayMs\":30000,"
++                + "\"retryAt\":1700000030000,\"reason\":{\"category\":\"http_5xx\","
++                + "\"status\":503,\"code\":\"SERVER_ERROR\"}}",
++                callback.retryStates.get(0));
++        assertEquals("{\"phase\":\"attempt_started\",\"retryCount\":1}", callback.retryStates.get(1));
++        assertEquals("{\"phase\":\"attempt_started\",\"retryCount\":0}", callback.retryStates.get(2));
++        assertTrue(state.getMessages().isEmpty());
++    }
++
+     @Test
+     public void contentDeltaIsForwardedToFrontendStreamingCallback() {
+         SessionState state = new SessionState();
+diff --git a/src/test/java/com/github/claudecodegui/session/SessionCallbackAdapterUsageTest.java b/src/test/java/com/github/claudecodegui/session/SessionCallbackAdapterUsageTest.java
+index 1304649ec2facce1732c19f15f7a3bb60b37a63d..7392b1aa54cc61ff4eae5850bcdc9242dd590d64 100644
+--- a/src/test/java/com/github/claudecodegui/session/SessionCallbackAdapterUsageTest.java
++++ b/src/test/java/com/github/claudecodegui/session/SessionCallbackAdapterUsageTest.java
+@@ -1,14 +1,104 @@
+ package com.github.claudecodegui.session;
+ 
++import com.github.claudecodegui.handler.core.HandlerContext;
++import com.google.gson.JsonArray;
++import com.google.gson.JsonObject;
++import com.intellij.ui.jcef.JBCefBrowser;
+ import org.junit.Test;
+ 
+ import static org.junit.Assert.assertEquals;
++import static org.junit.Assert.assertTrue;
++
++import java.util.ArrayList;
++import java.util.List;
+ 
+ /**
+  * Verifies usage values crossing the session callback JavaScript bridge are safe.
+  */
+ public class SessionCallbackAdapterUsageTest {
+ 
++    @Test
++    public void retryStateIsRetainedUntilVisibleActivity() {
++        RecordingJsTarget target = new RecordingJsTarget();
++        SessionCallbackAdapter adapter = new SessionCallbackAdapter(
++                null, target, null, () -> true, null);
++
++        String scheduled = "{\"phase\":\"scheduled\",\"retryCount\":1}";
++        adapter.onCodexRetryState(scheduled);
++        assertEquals(scheduled, adapter.getRetainedCodexRetryState());
++
++        String started = "{\"phase\":\"attempt_started\",\"retryCount\":1}";
++        adapter.onCodexRetryState(started);
++        assertEquals(started, adapter.getRetainedCodexRetryState());
++        assertTrue(target.calls.stream().anyMatch(call -> call.startsWith("onCodexRetryState:")));
++
++        adapter.onContentDelta("visible output");
++        assertEquals(null, adapter.getRetainedCodexRetryState());
++
++        adapter.onCodexRetryState(scheduled);
++        adapter.clearRetainedCodexRetryState();
++        assertEquals(null, adapter.getRetainedCodexRetryState());
++    }
++
++    @Test
++    public void historyAndEmptyAssistantSnapshotDoNotClearRetryState() {
++        StreamMessageCoalescer coalescer = new StreamMessageCoalescer(new DisposedCoalescerTarget());
++        SessionCallbackAdapter adapter = new SessionCallbackAdapter(
++                coalescer, new RecordingJsTarget(), null, () -> true, null);
++        try {
++            ClaudeSession.Message emptyAssistant = new ClaudeSession.Message(
++                    ClaudeSession.Message.Type.ASSISTANT, "", assistantRaw(new JsonArray()));
++            List<ClaudeSession.Message> messages = new ArrayList<>(List.of(
++                    new ClaudeSession.Message(ClaudeSession.Message.Type.USER, "earlier prompt"),
++                    new ClaudeSession.Message(ClaudeSession.Message.Type.ASSISTANT, "earlier response"),
++                    new ClaudeSession.Message(ClaudeSession.Message.Type.USER, "current prompt"),
++                    emptyAssistant
++            ));
++
++            String started = "{\"phase\":\"attempt_started\",\"retryCount\":1}";
++            adapter.onCodexRetryState(started);
++            adapter.onMessageUpdate(messages);
++            assertEquals(started, adapter.getRetainedCodexRetryState());
++
++            JsonArray blocks = new JsonArray();
++            JsonObject toolUse = new JsonObject();
++            toolUse.addProperty("type", "tool_use");
++            toolUse.addProperty("id", "tool-1");
++            toolUse.addProperty("name", "Bash");
++            blocks.add(toolUse);
++            emptyAssistant.raw = assistantRaw(blocks);
++            adapter.onMessageUpdate(messages);
++            assertEquals(null, adapter.getRetainedCodexRetryState());
++        } finally {
++            coalescer.dispose();
++        }
++    }
++
++    private static JsonObject assistantRaw(JsonArray blocks) {
++        JsonObject message = new JsonObject();
++        message.add("content", blocks);
++        JsonObject raw = new JsonObject();
++        raw.addProperty("type", "assistant");
++        raw.add("message", message);
++        return raw;
++    }
++
++    private static final class DisposedCoalescerTarget implements StreamMessageCoalescer.JsCallbackTarget {
++        @Override public void callJavaScript(String functionName, String... args) {}
++        @Override public JBCefBrowser getBrowser() { return null; }
++        @Override public boolean isDisposed() { return true; }
++        @Override public HandlerContext getHandlerContext() { return null; }
++    }
++
++    private static final class RecordingJsTarget implements SessionCallbackAdapter.JsTarget {
++        final List<String> calls = new ArrayList<>();
++
++        @Override
++        public void callJavaScript(String functionName, String... args) {
++            calls.add(functionName + ":" + (args.length > 0 ? args[0] : ""));
++        }
++    }
++
+     @Test
+     public void normalizeUsageValueRejectsNegativeValues() {
+         assertEquals(0, SessionCallbackAdapter.normalizeUsageValue(-1));
+diff --git a/src/test/java/com/github/claudecodegui/ui/ChatWindowDelegateTest.java b/src/test/java/com/github/claudecodegui/ui/ChatWindowDelegateTest.java
+index cfc0d9a4430e7ef7bc0c29af3330ea90018f3db4..639f0a2aa5eb5ca74a1b106c1209043008660f43 100644
+--- a/src/test/java/com/github/claudecodegui/ui/ChatWindowDelegateTest.java
++++ b/src/test/java/com/github/claudecodegui/ui/ChatWindowDelegateTest.java
+@@ -89,6 +89,23 @@ public class ChatWindowDelegateTest {
+         assertTrue(snapshotIndex < replayIndex);
+     }
+ 
++    @Test
++    public void frontendReadyReplaysRetryStateAfterOrdinaryLoadingState() {
++        List<String> javaScriptCalls = new ArrayList<>();
++        ChatWindowDelegate delegate = createFrontendReadyDelegate(
++                true,
++                javaScriptCalls,
++                "{\"phase\":\"scheduled\",\"retryCount\":3}"
++        );
++
++        delegate.handleFrontendReady();
++
++        int loadingIndex = javaScriptCalls.indexOf("showLoading");
++        int retryIndex = javaScriptCalls.indexOf("onCodexRetryState");
++        assertTrue(loadingIndex >= 0);
++        assertTrue(retryIndex > loadingIndex);
++    }
++
+     /**
+      * Creates a behavior-level delegate with minimal safe lifecycle collaborators and records
+      * every Java-to-frontend function invocation in call order.
+@@ -96,6 +113,14 @@ public class ChatWindowDelegateTest {
+     private static ChatWindowDelegate createFrontendReadyDelegate(
+             boolean runtimeRecovery,
+             List<String> javaScriptCalls
++    ) {
++        return createFrontendReadyDelegate(runtimeRecovery, javaScriptCalls, null);
++    }
++
++    private static ChatWindowDelegate createFrontendReadyDelegate(
++            boolean runtimeRecovery,
++            List<String> javaScriptCalls,
++            String retainedRetryState
+     ) {
+         ClaudeSession session = new ClaudeSession(null, null, null, null);
+         session.setProvider("codex");
+@@ -140,6 +165,8 @@ public class ChatWindowDelegateTest {
+                                     return coalescer;
+                                 case "isRuntimeRecoveryPage":
+                                     return runtimeRecovery;
++                                case "getRetainedCodexRetryState":
++                                    return retainedRetryState;
+                                 case "callJavaScript":
+                                     javaScriptCalls.add((String) args[0]);
+                                     return null;
+diff --git a/webview/src/App.tsx b/webview/src/App.tsx
+index 9bf73aba1746df004d1bbee146f03006447bc08a..ba5b0d317068cdde3233a14ad51d1f42ac60b40b 100644
+--- a/webview/src/App.tsx
++++ b/webview/src/App.tsx
+@@ -73,7 +73,7 @@ const App = () => {
+     messages, setMessages,
+     subagentHistories, setSubagentHistories,
+     setStatus,
+-    loading, setLoading, setLoadingStartTime,
++    loading, setLoading, setLoadingStartTime, setRetryState,
+     setIsThinking,
+     streamingActive, setStreamingActive,
+   } = useMessages();
+@@ -353,7 +353,7 @@ const App = () => {
+   // ── Window callbacks (bridge communication) ──
+   useWindowCallbacks({
+     t, addToast, clearToasts,
+-    setMessages, setStatus, setLoading, setLoadingStartTime,
++    setMessages, setStatus, setLoading, setLoadingStartTime, setRetryState,
+     setIsThinking, setStreamingActive, setHistoryData,
+     setCurrentSessionId, setUsagePercentage, setUsageUsedTokens, setUsageMaxTokens,
+     setPermissionMode, setCurrentProvider, setClaudePermissionMode, setCodexPermissionMode,
+diff --git a/webview/src/components/ChatScreen.tsx b/webview/src/components/ChatScreen.tsx
+index 1723b1fad73d2abe295ea2d21ced08c9f53fdb9a..97e595e586cd7af83fa296c2a9c8f2577a46b7c0 100644
+--- a/webview/src/components/ChatScreen.tsx
++++ b/webview/src/components/ChatScreen.tsx
+@@ -150,7 +150,9 @@ export const ChatScreen = ({
+   messageQueue, onRemoveFromQueue,
+ }: ChatScreenProps) => {
+   const { t } = useTranslation();
+-  const { messages, status, loading, isThinking, streamingActive, loadingStartTime, subagentHistories } = useMessages();
++  const {
++    messages, status, loading, isThinking, streamingActive, loadingStartTime, retryState, subagentHistories,
++  } = useMessages();
+   const { currentSessionId } = useSession();
+   const previousMessageKeySnapshotRef = useRef<MessageKeySnapshot | undefined>(undefined);
+   const messageKeySnapshot = useMemo(
+@@ -275,6 +277,7 @@ export const ChatScreen = ({
+                   isThinking={isThinking}
+                   loading={loading}
+                   loadingStartTime={loadingStartTime}
++                  retryState={retryState}
+                   t={t}
+                   getMessageText={getMessageText}
+                   getContentBlocks={getContentBlocks}
+diff --git a/webview/src/components/MessageList.tsx b/webview/src/components/MessageList.tsx
+index 399658c9365b3946e7471a666c63cf9622ff42c2..d776aa9ebcbfddf7e25839e09e04a4b23c91fe95 100644
+--- a/webview/src/components/MessageList.tsx
++++ b/webview/src/components/MessageList.tsx
+@@ -4,6 +4,7 @@ import type { ClaudeMessage, ClaudeContentBlock, CodexHistoryPageInfo, ToolResul
+ import { sendBridgeEvent } from '../utils/bridge';
+ import { MessageItem } from './MessageItem';
+ import WaitingIndicator from './WaitingIndicator';
++import type { CodexRetryState } from '../contexts/MessagesContext';
+ import { ContextMenu } from './ContextMenu';
+ import { useContextMenu, copySelection } from '../hooks/useContextMenu.js';
+ import { quoteToChatInput } from '../utils/quoteUtils';
+@@ -87,6 +88,7 @@ interface MessageListProps {
+   isThinking: boolean;
+   loading: boolean;
+   loadingStartTime: number | null;
++  retryState?: CodexRetryState | null;
+   t: TFunction;
+   getMessageText: (message: ClaudeMessage) => string;
+   getContentBlocks: (message: ClaudeMessage) => ClaudeContentBlock[];
+@@ -110,6 +112,7 @@ export const MessageList = memo(forwardRef<MessageListRevealHandle, MessageListP
+   isThinking,
+   loading,
+   loadingStartTime,
++  retryState,
+   t,
+   getMessageText,
+   getContentBlocks,
+@@ -345,7 +348,7 @@ export const MessageList = memo(forwardRef<MessageListRevealHandle, MessageListP
+       })}
+ 
+       {/* Loading indicator */}
+-      {loading && <WaitingIndicator startTime={loadingStartTime ?? undefined} />}
++      {loading && <WaitingIndicator startTime={loadingStartTime ?? undefined} retryState={retryState} />}
+       <div ref={messagesEndRef} />
+     </div>
+   );
+diff --git a/webview/src/components/WaitingIndicator.test.tsx b/webview/src/components/WaitingIndicator.test.tsx
+new file mode 100644
+index 0000000000000000000000000000000000000000..3974da1822abb443896d4ec0f91d0eb71a9ec058
+--- /dev/null
++++ b/webview/src/components/WaitingIndicator.test.tsx
+@@ -0,0 +1,86 @@
++import { act, render, screen } from '@testing-library/react';
++import { beforeEach, afterEach, describe, expect, it, vi } from 'vitest';
++import WaitingIndicator from './WaitingIndicator';
++
++vi.mock('react-i18next', () => ({
++  useTranslation: () => ({
++    t: (key: string, values?: Record<string, unknown>) => {
++      if (key === 'chat.retryingResponse') return `Retry ${values?.retryCount}`;
++      if (key === 'chat.retryReason') return `Reason: ${values?.reason}`;
++      if (key === 'chat.retryCountdown') return `${values?.seconds}s`;
++      if (key === 'chat.codexRunning') return 'Codex is running; waiting for output';
++      if (key === 'chat.retryAttemptRunning') return `Retry attempt ${values?.retryCount} is running; waiting for Codex output`;
++      if (key === 'chat.generatingResponse') return 'Generating response';
++      if (key === 'chat.elapsedTime') return `Elapsed ${values?.time}`;
++      if (key === 'common.seconds') return 's';
++      return key;
++    },
++  }),
++}));
++
++describe('WaitingIndicator retry progress', () => {
++  beforeEach(() => {
++    vi.useFakeTimers();
++    vi.setSystemTime(new Date('2026-08-13T00:00:00.000Z'));
++  });
++
++  afterEach(() => {
++    vi.useRealTimers();
++  });
++
++  it('shows retry number, safe reason, and a countdown that updates every second', () => {
++    render(<WaitingIndicator retryState={{
++      phase: 'scheduled',
++      retryCount: 3,
++      delayMs: 30000,
++      retryAt: Date.now() + 30000,
++      reason: { category: 'http_5xx', status: 503, code: 'SERVER_ERROR' },
++    }} />);
++
++    expect(screen.getByText('Retry 3')).toBeTruthy();
++    expect(screen.getByText('Reason: SERVER_ERROR')).toBeTruthy();
++    expect(screen.getByText('30s')).toBeTruthy();
++
++    act(() => {
++      vi.advanceTimersByTime(1000);
++    });
++    expect(screen.getByText('29s')).toBeTruthy();
++  });
++
++  it('owns and cleans up a dedicated retry countdown timer', () => {
++    const { unmount } = render(<WaitingIndicator retryState={{
++      phase: 'scheduled',
++      retryCount: 1,
++      delayMs: 30000,
++      retryAt: Date.now() + 30000,
++      reason: { category: 'rate_limit', status: 429 },
++    }} />);
++
++    expect(vi.getTimerCount()).toBe(3);
++    unmount();
++    expect(vi.getTimerCount()).toBe(0);
++  });
++
++  it('keeps the ordinary loading label when no retry is scheduled', () => {
++    render(<WaitingIndicator />);
++    expect(screen.getByText(/Generating response/)).toBeTruthy();
++  });
++
++  it('shows that the initial Codex attempt is running until output arrives', () => {
++    render(<WaitingIndicator retryState={{
++      phase: 'attempt_started',
++      retryCount: 0,
++    }} />);
++
++    expect(screen.getByText(/Codex is running; waiting for output/)).toBeTruthy();
++  });
++
++  it('keeps a started retry distinct from ordinary loading', () => {
++    render(<WaitingIndicator retryState={{
++      phase: 'attempt_started',
++      retryCount: 2,
++    }} />);
++
++    expect(screen.getByText(/Retry attempt 2 is running; waiting for Codex output/)).toBeTruthy();
++  });
++});
+diff --git a/webview/src/components/WaitingIndicator.tsx b/webview/src/components/WaitingIndicator.tsx
+index bfd41eb8d6fa066607093100e6add0df893dcb37..37a94167c74703ab98423993545066070bc3e279 100644
+--- a/webview/src/components/WaitingIndicator.tsx
++++ b/webview/src/components/WaitingIndicator.tsx
+@@ -1,13 +1,18 @@
+ import { useState, useEffect } from 'react';
+ import { useTranslation } from 'react-i18next';
++import type { CodexRetryState } from '../contexts/MessagesContext';
+ 
+ interface WaitingIndicatorProps {
+   size?: number;
+   /** Loading start timestamp (ms), used to maintain continuous timing across view switches */
+   startTime?: number;
++  retryState?: CodexRetryState | null;
+ }
+ 
+-export const WaitingIndicator = ({ size = 18, startTime }: WaitingIndicatorProps) => {
++const calculateRetrySeconds = (retryAt?: number): number =>
++  Math.max(0, Math.ceil(((retryAt ?? Date.now()) - Date.now()) / 1000));
++
++export const WaitingIndicator = ({ size = 18, startTime, retryState }: WaitingIndicatorProps) => {
+   const { t } = useTranslation();
+   const [dotCount, setDotCount] = useState(1);
+   const [elapsedSeconds, setElapsedSeconds] = useState(() => {
+@@ -17,6 +22,9 @@ export const WaitingIndicator = ({ size = 18, startTime }: WaitingIndicatorProps
+     }
+     return 0;
+   });
++  const [retrySeconds, setRetrySeconds] = useState<number | null>(() =>
++    retryState?.phase === 'scheduled' ? calculateRetrySeconds(retryState.retryAt) : null,
++  );
+ 
+   // Ellipsis animation
+   useEffect(() => {
+@@ -42,6 +50,18 @@ export const WaitingIndicator = ({ size = 18, startTime }: WaitingIndicatorProps
+     };
+   }, [startTime]);
+ 
++  useEffect(() => {
++    if (retryState?.phase !== 'scheduled') {
++      setRetrySeconds(null);
++      return;
++    }
++
++    const updateCountdown = () => setRetrySeconds(calculateRetrySeconds(retryState.retryAt));
++    updateCountdown();
++    const timer = setInterval(updateCountdown, 1000);
++    return () => clearInterval(timer);
++  }, [retryState?.phase, retryState?.retryAt]);
++
+   const dots = '.'.repeat(dotCount);
+ 
+   const spinnerStyle: React.CSSProperties = { width: size, height: size };
+@@ -60,12 +80,35 @@ export const WaitingIndicator = ({ size = 18, startTime }: WaitingIndicatorProps
+     <div className="waiting-indicator">
+       <span className="waiting-spinner" style={spinnerStyle} />
+       <span className="waiting-text">
+-	        {t('chat.generatingResponse')}<span className="waiting-dots">{dots}</span>
+-	        <span className="waiting-seconds">（{t('chat.elapsedTime', { time: formatElapsedTime(elapsedSeconds) })}）</span>
++        {retryState?.phase === 'scheduled' ? (
++          <>
++            {t('chat.retryingResponse', { retryCount: retryState.retryCount })}
++            <span className="waiting-dots">{dots}</span>
++            <span className="waiting-seconds">
++              {t('chat.retryReason', {
++                reason: retryState.reason?.code
++                  || (retryState.reason?.status ? `HTTP ${retryState.reason.status}` : retryState.reason?.category),
++              })}
++            </span>
++            <span className="waiting-seconds">{t('chat.retryCountdown', { seconds: retrySeconds })}</span>
++          </>
++        ) : retryState?.phase === 'attempt_started' ? (
++          <>
++            {retryState.retryCount === 0
++              ? t('chat.codexRunning')
++              : t('chat.retryAttemptRunning', { retryCount: retryState.retryCount })}
++            <span className="waiting-dots">{dots}</span>
++            <span className="waiting-seconds">（{t('chat.elapsedTime', { time: formatElapsedTime(elapsedSeconds) })}）</span>
++          </>
++        ) : (
++          <>
++            {t('chat.generatingResponse')}<span className="waiting-dots">{dots}</span>
++            <span className="waiting-seconds">（{t('chat.elapsedTime', { time: formatElapsedTime(elapsedSeconds) })}）</span>
++          </>
++        )}
+       </span>
+     </div>
+   );
+ };
+ 
+ export default WaitingIndicator;
+-
+diff --git a/webview/src/contexts/MessagesContext.tsx b/webview/src/contexts/MessagesContext.tsx
+index e71c53d6826a0a5d29bdc90becb7a0d6431d9d22..3003f8c5787ea3a67289ce11f19743ed11450748 100644
+--- a/webview/src/contexts/MessagesContext.tsx
++++ b/webview/src/contexts/MessagesContext.tsx
+@@ -3,6 +3,20 @@ import type { ClaudeMessage, SubagentHistoryResponse } from '../types';
+ 
+ export const DEFAULT_STATUS = 'ready';
+ 
++export interface CodexRetryReason {
++  category: 'capacity' | 'rate_limit' | 'http_5xx' | 'network' | 'inactivity' | 'retryable_error';
++  status?: number;
++  code?: string;
++}
++
++export interface CodexRetryState {
++  phase: 'scheduled' | 'attempt_started';
++  retryCount: number;
++  delayMs?: number;
++  retryAt?: number;
++  reason?: CodexRetryReason;
++}
++
+ export interface MessagesContextValue {
+   messages: ClaudeMessage[];
+   setMessages: React.Dispatch<React.SetStateAction<ClaudeMessage[]>>;
+@@ -14,6 +28,8 @@ export interface MessagesContextValue {
+   setLoading: React.Dispatch<React.SetStateAction<boolean>>;
+   loadingStartTime: number | null;
+   setLoadingStartTime: React.Dispatch<React.SetStateAction<number | null>>;
++  retryState: CodexRetryState | null;
++  setRetryState: React.Dispatch<React.SetStateAction<CodexRetryState | null>>;
+   isThinking: boolean;
+   setIsThinking: React.Dispatch<React.SetStateAction<boolean>>;
+   streamingActive: boolean;
+@@ -40,6 +56,7 @@ export function MessagesProvider({ children }: { children: ReactNode }) {
+   const [status, setStatus] = useState<string>(DEFAULT_STATUS);
+   const [loading, setLoading] = useState<boolean>(false);
+   const [loadingStartTime, setLoadingStartTime] = useState<number | null>(null);
++  const [retryState, setRetryState] = useState<CodexRetryState | null>(null);
+   const [isThinking, setIsThinking] = useState<boolean>(false);
+   const [streamingActive, setStreamingActive] = useState<boolean>(false);
+ 
+@@ -55,12 +72,14 @@ export function MessagesProvider({ children }: { children: ReactNode }) {
+       setLoading,
+       loadingStartTime,
+       setLoadingStartTime,
++      retryState,
++      setRetryState,
+       isThinking,
+       setIsThinking,
+       streamingActive,
+       setStreamingActive,
+     }),
+-    [messages, subagentHistories, status, loading, loadingStartTime, isThinking, streamingActive],
++    [messages, subagentHistories, status, loading, loadingStartTime, retryState, isThinking, streamingActive],
+   );
+ 
+   return <MessagesContext.Provider value={value}>{children}</MessagesContext.Provider>;
+diff --git a/webview/src/global.d.ts b/webview/src/global.d.ts
+index e626fb1ed20243a2171caf57b44d6f864650aef9..72d3bc9852b8960aa63360a9edb937ac198f7cda 100644
+--- a/webview/src/global.d.ts
++++ b/webview/src/global.d.ts
+@@ -53,6 +53,8 @@ interface Window {
+    */
+   showLoading?: (value: string | boolean) => void;
+ 
++  onCodexRetryState?: (json: string) => void;
++
+   /**
+    * Show thinking status
+    */
+diff --git a/webview/src/hooks/useWindowCallbacks.test.ts b/webview/src/hooks/useWindowCallbacks.test.ts
+index 4ff9433604080285a7f86b300165887373e03025..f0add5d787f47eb0b683590a26d9d309124527c1 100644
+--- a/webview/src/hooks/useWindowCallbacks.test.ts
++++ b/webview/src/hooks/useWindowCallbacks.test.ts
+@@ -30,6 +30,7 @@ describe('useWindowCallbacks integration', () => {
+     setStatus: vi.fn(),
+     setLoading: vi.fn(),
+     setLoadingStartTime: vi.fn(),
++    setRetryState: vi.fn(),
+     setIsThinking: vi.fn(),
+     setExpandedThinking: vi.fn(),
+     setStreamingActive: vi.fn(),
+@@ -1198,6 +1199,135 @@ describe('useWindowCallbacks integration', () => {
+     expect(window.__prependedHistoryMessageCount).toBe(0);
+   });
+ 
++  it('keeps initial and retry attempts visible until real stream activity arrives', () => {
++    const opts = createOptions();
++    renderHook(() => useWindowCallbacks(opts));
++
++    act(() => {
++      window.onCodexRetryState?.(JSON.stringify({
++        phase: 'scheduled',
++        retryCount: 2,
++        delayMs: 30000,
++        retryAt: Date.now() + 30000,
++        reason: { category: 'http_5xx', status: 503, code: 'SERVER_ERROR', message: 'Bearer must-not-cross' },
++      }));
++    });
++    expect(opts.setRetryState).toHaveBeenCalledWith({
++      phase: 'scheduled',
++      retryCount: 2,
++      delayMs: 30000,
++      retryAt: expect.any(Number),
++      reason: { category: 'http_5xx', status: 503, code: 'SERVER_ERROR' },
++    });
++    expect(opts.setLoading).toHaveBeenCalledWith(true);
++
++    act(() => {
++      window.onCodexRetryState?.('{"phase":"attempt_started","retryCount":2}');
++    });
++    expect(opts.setRetryState).toHaveBeenLastCalledWith({
++      phase: 'attempt_started',
++      retryCount: 2,
++    });
++    expect(opts.setLoading).toHaveBeenLastCalledWith(true);
++
++    act(() => {
++      window.onStreamStart?.();
++    });
++    expect(opts.setRetryState).toHaveBeenLastCalledWith({
++      phase: 'attempt_started',
++      retryCount: 2,
++    });
++
++    act(() => {
++      window.onContentDelta?.('visible output');
++    });
++    expect(opts.setRetryState).toHaveBeenLastCalledWith(null);
++    expect(opts.setLoading).not.toHaveBeenLastCalledWith(false);
++  });
++
++  it('accepts the initial attempt and clears it when a message snapshot arrives', () => {
++    const opts = createOptions();
++    renderHook(() => useWindowCallbacks(opts));
++
++    act(() => {
++      window.onCodexRetryState?.('{"phase":"attempt_started","retryCount":0}');
++    });
++    expect(opts.setRetryState).toHaveBeenLastCalledWith({
++      phase: 'attempt_started',
++      retryCount: 0,
++    });
++
++    act(() => {
++      window.updateMessages?.(JSON.stringify([{
++        type: 'assistant',
++        content: 'visible snapshot',
++      }]));
++    });
++    expect(opts.setRetryState).toHaveBeenLastCalledWith(null);
++  });
++
++  it('keeps attempt state through history and an empty assistant snapshot', () => {
++    vi.useFakeTimers();
++    const opts = createOptions();
++    renderHook(() => useWindowCallbacks(opts));
++
++    act(() => {
++      window.onCodexRetryState?.('{"phase":"attempt_started","retryCount":1}');
++      window.onStreamStart?.();
++      window.updateMessages?.(JSON.stringify([
++        { type: 'user', content: 'earlier prompt' },
++        { type: 'assistant', content: 'earlier response' },
++        { type: 'user', content: 'current prompt' },
++        { type: 'assistant', content: '', raw: { type: 'assistant', message: { content: [] } } },
++      ]));
++    });
++    act(() => vi.advanceTimersByTime(16));
++
++    expect(opts.setRetryState).not.toHaveBeenCalledWith(null);
++
++    act(() => {
++      window.updateMessages?.(JSON.stringify([
++        { type: 'user', content: 'earlier prompt' },
++        { type: 'assistant', content: 'earlier response' },
++        { type: 'user', content: 'current prompt' },
++        {
++          type: 'assistant',
++          content: '',
++          raw: {
++            type: 'assistant',
++            message: { content: [{ type: 'tool_use', id: 'tool-1', name: 'Bash' }] },
++          },
++        },
++      ]));
++    });
++    act(() => vi.advanceTimersByTime(16));
++
++    expect(opts.setRetryState).toHaveBeenLastCalledWith(null);
++  });
++
++  it('ignores malformed retry state and clears it on stream end and clearMessages', () => {
++    const opts = createOptions();
++    renderHook(() => useWindowCallbacks(opts));
++
++    act(() => {
++      window.onCodexRetryState?.('{"phase":"scheduled","retryCount":0}');
++    });
++    expect(opts.setRetryState).not.toHaveBeenCalled();
++
++    act(() => {
++      window.onCodexRetryState?.('{"phase":"scheduled","retryCount":1,"delayMs":30000,"retryAt":'
++        + (Date.now() + 30000)
++        + ',"reason":{"category":"network"}}');
++      window.onStreamEnd?.();
++    });
++    expect(opts.setRetryState).toHaveBeenLastCalledWith(null);
++
++    act(() => {
++      window.clearMessages?.();
++    });
++    expect(opts.setRetryState).toHaveBeenLastCalledWith(null);
++  });
++
+   // ===== clearMessages forces a webview repaint to clear JCEF ghosting =====
+ 
+   it('clearMessages triggers forceWebviewRepaint to clear leftover ghosting', () => {
+diff --git a/webview/src/hooks/useWindowCallbacks.ts b/webview/src/hooks/useWindowCallbacks.ts
+index 195854f9d42d0b384ba87737ba3b6b28e0303743..fa1304408f306fb40dbe24f67df5ce123e9b9f90 100644
+--- a/webview/src/hooks/useWindowCallbacks.ts
++++ b/webview/src/hooks/useWindowCallbacks.ts
+@@ -15,6 +15,7 @@ import type { PlanApprovalRequest } from '../components/PlanApprovalDialog';
+ import type { RewindRequest } from '../components/RewindDialog';
+ import { registerWindowCallbacks } from './windowCallbacks/registerCallbacks';
+ import { sendBridgeEvent } from '../utils/bridge';
++import type { CodexRetryState } from '../contexts/MessagesContext';
+ 
+ // Re-export from messageSync to avoid duplicate definition
+ export { OPTIMISTIC_MESSAGE_TIME_WINDOW } from './windowCallbacks/messageSync';
+@@ -36,6 +37,7 @@ export interface UseWindowCallbacksOptions {
+   setStatus: React.Dispatch<React.SetStateAction<string>>;
+   setLoading: React.Dispatch<React.SetStateAction<boolean>>;
+   setLoadingStartTime: React.Dispatch<React.SetStateAction<number | null>>;
++  setRetryState: React.Dispatch<React.SetStateAction<CodexRetryState | null>>;
+   setIsThinking: React.Dispatch<React.SetStateAction<boolean>>;
+   setExpandedThinking?: React.Dispatch<React.SetStateAction<Record<string, boolean>>>;
+   setStreamingActive: React.Dispatch<React.SetStateAction<boolean>>;
+diff --git a/webview/src/hooks/windowCallbacks/registerCallbacks.ts b/webview/src/hooks/windowCallbacks/registerCallbacks.ts
+index 926677cfedc4cf5fcce8f1df50a176c311a04e5e..7fdf7a00c1335e3149fa161354fef273adc6c2ec 100644
+--- a/webview/src/hooks/windowCallbacks/registerCallbacks.ts
++++ b/webview/src/hooks/windowCallbacks/registerCallbacks.ts
+@@ -72,6 +72,7 @@ export function registerWindowCallbacks(
+     setStatus: options.setStatus,
+     setLoading: options.setLoading,
+     setLoadingStartTime: options.setLoadingStartTime,
++    setRetryState: options.setRetryState,
+     setIsThinking: options.setIsThinking,
+     setStreamingActive: options.setStreamingActive,
+     isStreamingRef: options.isStreamingRef,
+diff --git a/webview/src/hooks/windowCallbacks/registerCallbacks/messageCallbacks.ts b/webview/src/hooks/windowCallbacks/registerCallbacks/messageCallbacks.ts
+index c7561d08ed87b5f74c2254cc75bfa765e8fffabb..87fafb40e70801a7d78eb3f64d36dea3d3059537 100644
+--- a/webview/src/hooks/windowCallbacks/registerCallbacks/messageCallbacks.ts
++++ b/webview/src/hooks/windowCallbacks/registerCallbacks/messageCallbacks.ts
+@@ -9,6 +9,7 @@
+ 
+ import type { UseWindowCallbacksOptions } from '../../useWindowCallbacks';
+ import type { ClaudeMessage, CodexHistoryPageInfo } from '../../../types';
++import type { CodexRetryState } from '../../../contexts/MessagesContext';
+ import type { ContextUsageData } from '../../../components/ContextUsageDialog';
+ import { sendBridgeEvent } from '../../../utils/bridge';
+ import { debugError } from '../../../utils/debug';
+@@ -28,6 +29,101 @@ import { collectUnresolvedToolUseIds } from './streamingCallbacks';
+ 
+ const isTruthy = (v: unknown) => v === true || v === 'true';
+ 
++const RETRY_CATEGORIES = new Set(['capacity', 'rate_limit', 'http_5xx', 'network', 'inactivity', 'retryable_error']);
++const SAFE_RETRY_CODES = new Set([
++  'ECONNRESET', 'ECONNREFUSED', 'EPIPE', 'ETIMEDOUT', 'ENETDOWN', 'ENETRESET',
++  'ENETUNREACH', 'EHOSTDOWN', 'EHOSTUNREACH', 'ENOTFOUND', 'EAI_AGAIN',
++  'UND_ERR_CONNECT_TIMEOUT', 'UND_ERR_HEADERS_TIMEOUT', 'UND_ERR_BODY_TIMEOUT',
++  'UND_ERR_SOCKET', 'CODEX_STREAM_INACTIVITY_TIMEOUT', 'MODEL_AT_CAPACITY',
++  'RATE_LIMIT_EXCEEDED', 'SERVER_ERROR', 'INTERNAL_SERVER_ERROR',
++  'SERVICE_UNAVAILABLE', 'BAD_GATEWAY', 'GATEWAY_TIMEOUT',
++]);
++
++function parseCodexRetryState(json: string): CodexRetryState | null {
++  try {
++    const value = JSON.parse(json) as Record<string, unknown>;
++    if (!value || typeof value !== 'object') return null;
++    const phase = value.phase;
++    const retryCount = value.retryCount;
++    if ((phase !== 'scheduled' && phase !== 'attempt_started')
++      || typeof retryCount !== 'number' || !Number.isSafeInteger(retryCount) || retryCount < 0) return null;
++    if (phase === 'attempt_started') return { phase, retryCount };
++    if (retryCount < 1) return null;
++    const delayMs = value.delayMs;
++    const retryAt = value.retryAt;
++    const reason = value.reason as Record<string, unknown> | undefined;
++    if (typeof delayMs !== 'number' || !Number.isSafeInteger(delayMs) || delayMs < 1
++      || typeof retryAt !== 'number' || !Number.isSafeInteger(retryAt) || retryAt < 1
++      || !reason || typeof reason !== 'object'
++      || typeof reason.category !== 'string' || !RETRY_CATEGORIES.has(reason.category)) return null;
++    const normalizedReason: NonNullable<CodexRetryState['reason']> = {
++      category: reason.category as NonNullable<CodexRetryState['reason']>['category'],
++    };
++    if (reason.status !== undefined) {
++      if (typeof reason.status !== 'number' || !Number.isInteger(reason.status) || reason.status < 100 || reason.status > 599) return null;
++      normalizedReason.status = reason.status;
++    }
++    if (reason.code !== undefined) {
++      if (typeof reason.code === 'string' && SAFE_RETRY_CODES.has(reason.code)) {
++        normalizedReason.code = reason.code;
++      }
++    }
++    return { phase, retryCount, delayMs, retryAt, reason: normalizedReason };
++  } catch {
++    return null;
++  }
++}
++
++function getMessageContentBlocks(message: ClaudeMessage): Record<string, unknown>[] {
++  let raw = message.raw;
++  if (typeof raw === 'string') {
++    try {
++      raw = JSON.parse(raw) as ClaudeMessage['raw'];
++    } catch {
++      return [];
++    }
++  }
++  if (!raw || typeof raw !== 'object') return [];
++  const content = raw.message?.content ?? raw.content;
++  if (!Array.isArray(content)) return [];
++  return (content as unknown[]).filter(
++    (block): block is Record<string, unknown> => Boolean(block) && typeof block === 'object',
++  );
++}
++
++function isToolResultMessage(message: ClaudeMessage): boolean {
++  return message.type === 'user' && (
++    message.content === '[tool_result]'
++    || getMessageContentBlocks(message).some((block) => block.type === 'tool_result')
++  );
++}
++
++function hasVisibleCodexOutput(messages: ClaudeMessage[]): boolean {
++  let currentTurnStart = 0;
++  for (let index = messages.length - 1; index >= 0; index -= 1) {
++    if (messages[index].type === 'user' && !isToolResultMessage(messages[index])) {
++      currentTurnStart = index + 1;
++      break;
++    }
++  }
++
++  return messages.slice(currentTurnStart).some((message) => {
++    if (message.type === 'error') return Boolean(message.content?.trim());
++    if (isToolResultMessage(message)) return true;
++    if (message.type !== 'assistant') return false;
++    if (message.content?.trim()) return true;
++    return getMessageContentBlocks(message).some((block) => {
++      if (block.type === 'tool_use' || block.type === 'tool_result') return true;
++      if (block.type === 'text') return typeof block.text === 'string' && block.text.trim().length > 0;
++      if (block.type === 'thinking') {
++        const thinking = typeof block.thinking === 'string' ? block.thinking : block.text;
++        return typeof thinking === 'string' && thinking.trim().length > 0;
++      }
++      return false;
++    });
++  });
++}
++
+ /**
+  * Build a lightweight string signature from non-text raw blocks so we can
+  * cheaply detect structural changes (new tool_use/tool_result blocks) without
+@@ -76,6 +172,7 @@ export function registerMessageCallbacks(
+     setStatus,
+     setLoading,
+     setLoadingStartTime,
++    setRetryState,
+     setIsThinking,
+     setHistoryData,
+     userPausedRef,
+@@ -212,6 +309,7 @@ export function registerMessageCallbacks(
+       const raw = JSON.parse(json) as unknown;
+       if (!Array.isArray(raw)) return;
+       const backendMessages = raw as ClaudeMessage[];
++      if (hasVisibleCodexOutput(backendMessages)) setRetryState(null);
+       if (sequence != null) {
+         window.__minAcceptedUpdateSequence = Math.max(minAcceptedSequence, sequence);
+       }
+@@ -459,6 +557,7 @@ export function registerMessageCallbacks(
+     try {
+       const tail = JSON.parse(json) as ClaudeMessage[];
+       if (!Array.isArray(tail)) return;
++      if (hasVisibleCodexOutput(tail)) setRetryState(null);
+       if (sequence != null) {
+         window.__minAcceptedUpdateSequence = Math.max(minAcceptedSequence, sequence);
+       }
+@@ -598,6 +697,13 @@ export function registerMessageCallbacks(
+     addToast(text);
+   };
+ 
++  window.onCodexRetryState = (json) => {
++    const retryState = parseCodexRetryState(json);
++    if (!retryState) return;
++    setRetryState(retryState);
++    setLoading(true);
++  };
++
+   window.showLoading = (value) => {
+     const isLoading = isTruthy(value);
+ 
+@@ -606,6 +712,10 @@ export function registerMessageCallbacks(
+       return;
+     }
+ 
++    if (!isLoading) {
++      setRetryState(null);
++    }
++
+     // Notify backend about loading state change for tab indicator
+     sendBridgeEvent('tab_loading_changed', JSON.stringify({ loading: isLoading }));
+ 
+@@ -747,6 +857,7 @@ export function registerMessageCallbacks(
+     window.__pendingHistoryRefreshMessageCount = undefined;
+     window.__historySurfaceRefreshEpoch = (window.__historySurfaceRefreshEpoch ?? 0) + 1;
+     resetTransientUiState();
++    setRetryState(null);
+     closeContextUsageDialog();
+     setMessages([]);
+   };
+diff --git a/webview/src/hooks/windowCallbacks/registerCallbacks/streamingCallbacks.ts b/webview/src/hooks/windowCallbacks/registerCallbacks/streamingCallbacks.ts
+index 1b971fe764a352a172b941402d78d95389f24bf5..8dc3e460c5496b2bb6ea609809d203a8a29fa6e0 100644
+--- a/webview/src/hooks/windowCallbacks/registerCallbacks/streamingCallbacks.ts
++++ b/webview/src/hooks/windowCallbacks/registerCallbacks/streamingCallbacks.ts
+@@ -194,6 +194,7 @@ export function registerStreamingCallbacks(options: UseWindowCallbacksOptions):
+     setStreamingActive,
+     setLoading,
+     setLoadingStartTime,
++    setRetryState,
+     setIsThinking,
+     setExpandedThinking,
+     streamingContentRef,
+@@ -406,6 +407,7 @@ export function registerStreamingCallbacks(options: UseWindowCallbacksOptions):
+   window.onContentDelta = (delta: string) => {
+     if (window.__sessionTransitioning) return;
+     if (!isStreamingRef.current) return;
++    if (delta) setRetryState?.(null);
+     window.__lastStreamActivityAt = Date.now();
+     streamingContentRef.current += delta;
+     scheduleContentRaf();
+@@ -414,6 +416,7 @@ export function registerStreamingCallbacks(options: UseWindowCallbacksOptions):
+   window.onThinkingDelta = (delta: string) => {
+     if (window.__sessionTransitioning) return;
+     if (!isStreamingRef.current) return;
++    if (delta) setRetryState?.(null);
+     window.__lastStreamActivityAt = Date.now();
+     streamingThinkingRef.current += delta;
+     scheduleThinkingRaf();
+@@ -445,6 +448,7 @@ export function registerStreamingCallbacks(options: UseWindowCallbacksOptions):
+ 
+   window.onStreamEnd = (sequence?: string | number) => {
+     if (window.__sessionTransitioning) return;
++    setRetryState?.(null);
+ 
+     // Idempotency guard: dual-path delivery (primary via flush callback +
+     // fallback via Alarm) may send onStreamEnd twice for the same turn.
+diff --git a/webview/src/hooks/windowCallbacks/sessionTransition.ts b/webview/src/hooks/windowCallbacks/sessionTransition.ts
+index 30a4a9cbca9439d60e77a9412c3490adfeab4c4c..10a85f10a447ec7fc16392b5d68b1eddc50087b4 100644
+--- a/webview/src/hooks/windowCallbacks/sessionTransition.ts
++++ b/webview/src/hooks/windowCallbacks/sessionTransition.ts
+@@ -8,12 +8,14 @@
+ 
+ import type { MutableRefObject } from 'react';
+ import { forceWebviewRepaint } from '../../utils/forceWebviewRepaint';
++import type { CodexRetryState } from '../../contexts/MessagesContext';
+ 
+ export interface ResetTransientUiStateOptions {
+   clearToasts: () => void;
+   setStatus: React.Dispatch<React.SetStateAction<string>>;
+   setLoading: React.Dispatch<React.SetStateAction<boolean>>;
+   setLoadingStartTime: React.Dispatch<React.SetStateAction<number | null>>;
++  setRetryState: React.Dispatch<React.SetStateAction<CodexRetryState | null>>;
+   setIsThinking: React.Dispatch<React.SetStateAction<boolean>>;
+   setStreamingActive: React.Dispatch<React.SetStateAction<boolean>>;
+ 
+@@ -42,6 +44,7 @@ export const buildResetTransientUiState = (opts: ResetTransientUiStateOptions) =
+     opts.setStatus('');
+     opts.setLoading(false);
+     opts.setLoadingStartTime(null);
++    opts.setRetryState(null);
+     opts.setIsThinking(false);
+     opts.setStreamingActive(false);
+     opts.isStreamingRef.current = false;
+diff --git a/webview/src/i18n/locales/en.json b/webview/src/i18n/locales/en.json
+index 25641556cbcd76e76c13347a752c2d1302df45fc..f16ecd3501ec8ad075d82c4f677b9658a6cbc1b4 100644
+--- a/webview/src/i18n/locales/en.json
++++ b/webview/src/i18n/locales/en.json
+@@ -68,6 +68,11 @@
+     "stopGeneration": "Stop generation",
+     "generatingResponse": "Generating response",
+     "elapsedTime": "Elapsed {{time}}",
++    "retryingResponse": "Retrying response (attempt {{retryCount}})",
++    "retryReason": "Reason: {{reason}}",
++    "retryCountdown": "Retrying in {{seconds}}s",
++    "codexRunning": "Codex is running; waiting for output",
++    "retryAttemptRunning": "Retry attempt {{retryCount}} is running; waiting for Codex output",
+     "minutesAndSeconds": "{{minutes}}m {{seconds}}s",
+     "imagePreview": "Preview",
+     "context": "Context",
+diff --git a/webview/src/i18n/locales/es.json b/webview/src/i18n/locales/es.json
+index 02d6b1d94b682e2f0e4c9f01ba9658445c36c3ae..2638557c65ac6acac06dd39a0df2910588579218 100644
+--- a/webview/src/i18n/locales/es.json
++++ b/webview/src/i18n/locales/es.json
+@@ -51,6 +51,11 @@
+     "stopGeneration": "Detener generación",
+     "generatingResponse": "Generando respuesta",
+     "elapsedTime": "Transcurrido {{time}}",
++    "retryingResponse": "Reintentando respuesta (intento {{retryCount}})",
++    "retryReason": "Motivo: {{reason}}",
++    "retryCountdown": "Reintentando en {{seconds}}s",
++    "codexRunning": "Codex está en ejecución; esperando salida",
++    "retryAttemptRunning": "El reintento {{retryCount}} está en ejecución; esperando la salida de Codex",
+     "minutesAndSeconds": "{{minutes}}m {{seconds}}s",
+     "imagePreview": "Vista previa",
+     "context": "Contexto",
+diff --git a/webview/src/i18n/locales/fr.json b/webview/src/i18n/locales/fr.json
+index c09907b5e00555a24c88bf20fa7563e4dbed55a1..ff4fad78c8ce61f2ec2d9ed2b31b512b266256f9 100644
+--- a/webview/src/i18n/locales/fr.json
++++ b/webview/src/i18n/locales/fr.json
+@@ -51,6 +51,11 @@
+     "stopGeneration": "Arrêter la génération",
+     "generatingResponse": "Génération de la réponse",
+     "elapsedTime": "Écoulé {{time}}",
++    "retryingResponse": "Nouvelle tentative (essai {{retryCount}})",
++    "retryReason": "Motif : {{reason}}",
++    "retryCountdown": "Nouvelle tentative dans {{seconds}} s",
++    "codexRunning": "Codex est en cours d'exécution ; en attente de sortie",
++    "retryAttemptRunning": "La tentative {{retryCount}} est en cours ; en attente de la sortie de Codex",
+     "minutesAndSeconds": "{{minutes}}m {{seconds}}s",
+     "imagePreview": "Aperçu",
+     "context": "Contexte",
+diff --git a/webview/src/i18n/locales/hi.json b/webview/src/i18n/locales/hi.json
+index e92bd8583973efa70f84942c9e7976dcd7f45315..9b23b83573a500733a5c16e5ff722fa9ace3d6e1 100644
+--- a/webview/src/i18n/locales/hi.json
++++ b/webview/src/i18n/locales/hi.json
+@@ -51,6 +51,11 @@
+     "stopGeneration": "जनरेशन रोकें",
+     "generatingResponse": "प्रतिक्रिया उत्पन्न हो रही है",
+     "elapsedTime": "बीता {{time}}",
++    "retryingResponse": "प्रतिक्रिया पुनः प्रयास (प्रयास {{retryCount}})",
++    "retryReason": "कारण: {{reason}}",
++    "retryCountdown": "{{seconds}} सेकंड में पुनः प्रयास",
++    "codexRunning": "Codex चल रहा है; आउटपुट की प्रतीक्षा है",
++    "retryAttemptRunning": "पुनः प्रयास {{retryCount}} चल रहा है; Codex आउटपुट की प्रतीक्षा है",
+     "minutesAndSeconds": "{{minutes}} मि {{seconds}} से",
+     "imagePreview": "पूर्वावलोकन",
+     "context": "संदर्भ",
+diff --git a/webview/src/i18n/locales/ja.json b/webview/src/i18n/locales/ja.json
+index 75d24055d8a580ed9f33c69883aad9befeb60e9f..de6a70e0d949d019ce6075e53351153a9488491a 100644
+--- a/webview/src/i18n/locales/ja.json
++++ b/webview/src/i18n/locales/ja.json
+@@ -51,6 +51,11 @@
+     "stopGeneration": "生成を停止",
+     "generatingResponse": "応答を生成中",
+     "elapsedTime": "経過時間 {{time}}",
++    "retryingResponse": "応答を再試行中（{{retryCount}}回目）",
++    "retryReason": "理由: {{reason}}",
++    "retryCountdown": "{{seconds}}秒後に再試行",
++    "codexRunning": "Codex は実行中です。出力を待っています",
++    "retryAttemptRunning": "再試行 {{retryCount}} は実行中です。Codex の出力を待っています",
+     "minutesAndSeconds": "{{minutes}}分 {{seconds}}秒",
+     "imagePreview": "プレビュー",
+     "context": "コンテキスト",
+diff --git a/webview/src/i18n/locales/ko.json b/webview/src/i18n/locales/ko.json
+index 3cd7890340a8a57d1095f41b2c286a6be4d95066..71132c6de019690c32ec4f0c50e7fa748f5eaec8 100644
+--- a/webview/src/i18n/locales/ko.json
++++ b/webview/src/i18n/locales/ko.json
+@@ -51,6 +51,11 @@
+     "stopGeneration": "생성 중지",
+     "generatingResponse": "응답 생성 중",
+     "elapsedTime": "경과 시간 {{time}}",
++    "retryingResponse": "응답 재시도 중 ({{retryCount}}회)",
++    "retryReason": "이유: {{reason}}",
++    "retryCountdown": "{{seconds}}초 후 재시도",
++    "codexRunning": "Codex 실행 중; 출력을 기다리는 중",
++    "retryAttemptRunning": "재시도 {{retryCount}} 실행 중; Codex 출력을 기다리는 중",
+     "minutesAndSeconds": "{{minutes}}분 {{seconds}}초",
+     "imagePreview": "미리보기",
+     "context": "컨텍스트",
+diff --git a/webview/src/i18n/locales/pt-BR.json b/webview/src/i18n/locales/pt-BR.json
+index 4a3d3aae4d285bc47c96b8eda9445d3ba44f8543..159a25ebd39dc0ff7ab7651f367a8892632d0914 100644
+--- a/webview/src/i18n/locales/pt-BR.json
++++ b/webview/src/i18n/locales/pt-BR.json
+@@ -51,6 +51,11 @@
+     "stopGeneration": "Parar geração",
+     "generatingResponse": "Gerando resposta",
+     "elapsedTime": "Decorrido {{time}}",
++    "retryingResponse": "Tentando novamente (tentativa {{retryCount}})",
++    "retryReason": "Motivo: {{reason}}",
++    "retryCountdown": "Nova tentativa em {{seconds}}s",
++    "codexRunning": "O Codex está em execução; aguardando saída",
++    "retryAttemptRunning": "A tentativa {{retryCount}} está em execução; aguardando a saída do Codex",
+     "minutesAndSeconds": "{{minutes}}m {{seconds}}s",
+     "imagePreview": "Visualização",
+     "context": "Contexto",
+diff --git a/webview/src/i18n/locales/ru.json b/webview/src/i18n/locales/ru.json
+index 9d26b015e5d4139f89064a4406cb34eaa32a05b1..4e18bfd388f634642ea81143b9f532d8db070c74 100644
+--- a/webview/src/i18n/locales/ru.json
++++ b/webview/src/i18n/locales/ru.json
+@@ -51,6 +51,11 @@
+     "stopGeneration": "Остановить генерацию",
+     "generatingResponse": "Генерирую ответ",
+     "elapsedTime": "Прошло {{time}}",
++    "retryingResponse": "Повторная попытка ответа (попытка {{retryCount}})",
++    "retryReason": "Причина: {{reason}}",
++    "retryCountdown": "Повтор через {{seconds}} с",
++    "codexRunning": "Codex работает; ожидание вывода",
++    "retryAttemptRunning": "Повторная попытка {{retryCount}} выполняется; ожидание вывода Codex",
+     "minutesAndSeconds": "{{minutes}}м {{seconds}}с",
+     "imagePreview": "Предпросмотр",
+     "context": "Контекст",
+diff --git a/webview/src/i18n/locales/zh-TW.json b/webview/src/i18n/locales/zh-TW.json
+index 971c7f675c92068598864991f4686027ccb15ca2..1048f4f964b79b5d1d56545bcef7982714814929 100644
+--- a/webview/src/i18n/locales/zh-TW.json
++++ b/webview/src/i18n/locales/zh-TW.json
+@@ -51,6 +51,11 @@
+     "stopGeneration": "停止生成",
+     "generatingResponse": "正在生成響應",
+     "elapsedTime": "已用 {{time}}",
++    "retryingResponse": "正在重試回應（第 {{retryCount}} 次）",
++    "retryReason": "原因：{{reason}}",
++    "retryCountdown": "{{seconds}} 秒後重試",
++    "codexRunning": "Codex 正在執行，等待輸出",
++    "retryAttemptRunning": "第 {{retryCount}} 次重試正在執行，等待 Codex 輸出",
+     "minutesAndSeconds": "{{minutes}} 分 {{seconds}} 秒",
+     "imagePreview": "預覽",
+     "context": "上下文",
+diff --git a/webview/src/i18n/locales/zh.json b/webview/src/i18n/locales/zh.json
+index 7292a409fc0c498579f00d02fd60b8e94a0cf992..e34b8cea3292e8fe435521a9907c975f65523b5e 100644
+--- a/webview/src/i18n/locales/zh.json
++++ b/webview/src/i18n/locales/zh.json
+@@ -68,6 +68,11 @@
+     "stopGeneration": "停止生成",
+     "generatingResponse": "正在生成响应",
+     "elapsedTime": "已用 {{time}}",
++    "retryingResponse": "正在重试响应（第 {{retryCount}} 次）",
++    "retryReason": "原因：{{reason}}",
++    "retryCountdown": "{{seconds}} 秒后重试",
++    "codexRunning": "Codex 正在运行，等待输出",
++    "retryAttemptRunning": "第 {{retryCount}} 次重试正在运行，等待 Codex 输出",
+     "minutesAndSeconds": "{{minutes}} 分 {{seconds}} 秒",
+     "imagePreview": "预览",
+     "context": "上下文",
+
+Changes:
+
+ai-bridge/services/codex/codex-event-handler.js
+  @@ -34,6 +34,7 @@ import {
+  +import { CodexTurnFailure } from './codex-retry.js';
+   
+   const COMMAND_DENIED_ABORT_ERROR = '__CODEX_COMMAND_DENIED_ABORT__';
+   const CODEX_USAGE_FIELDS = [
+  @@ -1061,11 +1062,8 @@ export async function processCodexEventStream(events, state, config) {
+  -        if (typeof config.onTurnFailed === 'function') {
+  -          config.onTurnFailed(event, state);
+  -        }
+           console.error('[DEBUG] Turn failed:', errorMsg);
+  -        throw new Error(errorMsg);
+  +        throw new CodexTurnFailure(errorMsg, event);
+         }
+   
+         case 'error': {
+  @@ -1079,11 +1077,8 @@ export async function processCodexEventStream(events, state, config) {
+  -        if (typeof config.onTurnFailed === 'function') {
+  -          config.onTurnFailed(event, state);
+  -        }
+           console.error('[DEBUG] Codex error:', generalError);
+  -        throw new Error(generalError);
+  +        throw new CodexTurnFailure(generalError, event);
+         }
+   
+         default: {
+  +3 -8
+
+ai-bridge/services/codex/codex-event-handler.test.js
+  @@ -9,6 +9,7 @@ import {
+  +import { CodexTurnFailure } from './codex-retry.js';
+   
+   async function* eventsFrom(items) {
+     for (const item of items) {
+  @@ -57,6 +58,45 @@ const CUSTOM_EXEC_PATCH = [
+  +test('turn.failed preserves structured details for the retry coordinator', async () => {
+  +  const state = createInitialEventState(() => {});
+  +  let turnFailedCalls = 0;
+  +  const event = {
+  +    type: 'turn.failed',
+  +    error: { message: 'HTTP 502 from upstream', status: 502, code: 'server_error' },
+  +  };
+  +
+  +  await assert.rejects(
+  +    captureStdout(() => processCodexEventStream(
+  +      eventsFrom([event]),
+  +      state,
+  +      { ...makeConfig(), onTurnFailed: () => { turnFailedCalls += 1; } },
+  +    )),
+  +    (error) => error instanceof CodexTurnFailure && error.details === event,
+  +  );
+  +  assert.equal(turnFailedCalls, 0);
+  +});
+  +
+  +test('error event preserves structured details for the retry coordinator', async () => {
+  +  const state = createInitialEventState(() => {});
+  +  let turnFailedCalls = 0;
+  +  const event = {
+  +    type: 'error',
+  +    message: 'Selected model is at capacity. Please try a different model.',
+  +    code: 'model_at_capacity',
+  +  };
+  +
+  +  await assert.rejects(
+  +    captureStdout(() => processCodexEventStream(
+  +      eventsFrom([event]),
+  +      state,
+  +      { ...makeConfig(), onTurnFailed: () => { turnFailedCalls += 1; } },
+  +    )),
+  +    (error) => error instanceof CodexTurnFailure && error.details === event,
+  +  );
+  +  assert.equal(turnFailedCalls, 0);
+  +});
+  +
+   test('custom_tool_call exec apply_patch emits edit and result messages without file_change', async () => {
+     const emittedMessages = [];
+     const state = createInitialEventState((message) => emittedMessages.push(message));
+  +40 -0
+
+ai-bridge/services/codex/codex-retry.js
+  @@ -0,0 +1,295 @@
+  +export const CODEX_RETRY_DELAY_MS = 30_000;
+  +export const CODEX_INACTIVITY_TIMEOUT_MS = 600_000;
+  +export const CODEX_INACTIVITY_TIMEOUT_CODE = 'CODEX_STREAM_INACTIVITY_TIMEOUT';
+  +
+  +const NETWORK_ERROR_CODES = new Set([
+  +  'ECONNRESET',
+  +  'ECONNREFUSED',
+  +  'EPIPE',
+  +  'ETIMEDOUT',
+  +  'ENETDOWN',
+  +  'ENETRESET',
+  +  'ENETUNREACH',
+  +  'EHOSTDOWN',
+  +  'EHOSTUNREACH',
+  +  'ENOTFOUND',
+  +  'EAI_AGAIN',
+  +  'UND_ERR_CONNECT_TIMEOUT',
+  +  'UND_ERR_HEADERS_TIMEOUT',
+  +  'UND_ERR_BODY_TIMEOUT',
+  +  'UND_ERR_SOCKET',
+  +  CODEX_INACTIVITY_TIMEOUT_CODE,
+  +]);
+  +
+  +const DAILY_LIMIT_CODES = new Set([
+  +  'DAYLY_LIMIT_EXCEEDED',
+  +  'DAILY_LIMIT_EXCEEDED',
+  +  'DAILY_USAGE_LIMIT_EXCEEDED',
+  +]);
+  +
+  +const SAFE_RETRY_CODES = new Set([
+  +  ...NETWORK_ERROR_CODES,
+  +  'MODEL_AT_CAPACITY',
+  +  'RATE_LIMIT_EXCEEDED',
+  +  'SERVER_ERROR',
+  +  'INTERNAL_SERVER_ERROR',
+  +  'SERVICE_UNAVAILABLE',
+  +  'BAD_GATEWAY',
+  +  'GATEWAY_TIMEOUT',
+  +]);
+  +
+  +export class CodexInactivityTimeoutError extends Error {
+  +  constructor(timeoutMs) {
+  +    super(`Codex SDK stream produced no events for ${timeoutMs}ms`);
+  +    this.name = 'CodexInactivityTimeoutError';
+  +    this.code = CODEX_INACTIVITY_TIMEOUT_CODE;
+  +    this.timeoutMs = timeoutMs;
+  +  }
+  +}
+  +
+  +export class CodexTurnFailure extends Error {
+  +  constructor(message, details) {
+  +    super(message, details instanceof Error ? { cause: details } : undefined);
+  +    this.name = 'CodexTurnFailure';
+  +    this.details = details;
+  +  }
+  +}
+  +
+  +export function resolveCodexInactivityTimeoutMs(value) {
+  +  const parsed = typeof value === 'number' ? value : Number(value);
+  +  return Number.isSafeInteger(parsed) && parsed > 0 ? parsed : CODEX_INACTIVITY_TIMEOUT_MS;
+  +}
+  +
+  +function numericStatus(value) {
+  +  if (typeof value === 'number' && Number.isInteger(value) && value >= 100 && value <= 599) return value;
+  +  if (typeof value === 'string' && /^\d{3}$/.test(value.trim())) {
+  +    const parsed = Number(value);
+  +    if (parsed >= 100 && parsed <= 599) return parsed;
+  +  }
+  +  return null;
+  +}
+  +
+  +function normalizeErrorIdentifier(value) {
+  +  if (typeof value !== 'string') return null;
+  +  const normalized = value
+  +    .trim()
+  +    .toUpperCase()
+  +    .replace(/[\u2010-\u2015\u2212\uFE58\uFE63\uFF0D.\s-]+/g, '_')
+  +    .replace(/^_+|_+$/g, '');
+  +  return normalized || null;
+  +}
+  +
+  +function collectErrorEvidence(root) {
+  +  const statuses = new Set();
+  +  const codes = new Set();
+  +  const reasons = new Set();
+  +  const messages = [];
+  +  const seen = new Set();
+  +  const pending = [root];
+  +
+  +  while (pending.length > 0) {
+  +    const value = pending.pop();
+  +    if (value == null) continue;
+  +    if (typeof value === 'string') {
+  +      messages.push(value);
+  +      continue;
+  +    }
+  +    if (typeof value !== 'object' || seen.has(value)) continue;
+  +    seen.add(value);
+  +
+  +    for (const key of ['status', 'statusCode', 'httpStatus', 'http_status']) {
+  ... (195 lines truncated)
+  +295 -0
+
+ai-bridge/services/codex/codex-retry.test.js
+  @@ -0,0 +1,417 @@
+  +import test from 'node:test';
+  +import assert from 'node:assert/strict';
+  +import {
+  +  CODEX_INACTIVITY_TIMEOUT_MS,
+  +  CODEX_RETRY_DELAY_MS,
+  +  CodexInactivityTimeoutError,
+  +  CodexTurnFailure,
+  +  abortableDelay,
+  +  buildCodexRetryReason,
+  +  isRetryableCodexError,
+  +  resolveCodexInactivityTimeoutMs,
+  +  runCodexTurnWithRetry,
+  +  withCodexInactivityTimeout,
+  +} from './codex-retry.js';
+  +
+  +test('builds allowlisted retry reasons without arbitrary upstream messages', () => {
+  +  const reason = buildCodexRetryReason({
+  +    status: 503,
+  +    code: 'server_error',
+  +    message: 'HTTP 503 upstream rejected Bearer sk-live-secret at https://example.test?api_key=query-secret',
+  +    response: {
+  +      body: 'must-not-cross',
+  +      headers: { authorization: 'Bearer nested-secret' },
+  +      message: 'nested response message must not replace the root summary',
+  +    },
+  +  });
+  +
+  +  assert.equal(reason.category, 'http_5xx');
+  +  assert.equal(reason.status, 503);
+  +  assert.equal(reason.code, 'SERVER_ERROR');
+  +  assert.equal(Object.hasOwn(reason, 'message'), false);
+  +  assert.deepEqual(Object.keys(reason).sort(), ['category', 'code', 'status']);
+  +  assert.equal(JSON.stringify(reason).includes('sk-live-secret'), false);
+  +  assert.equal(JSON.stringify(reason).includes('query-secret'), false);
+  +  assert.equal(JSON.stringify(reason).includes('must-not-cross'), false);
+  +  assert.equal(JSON.stringify(reason).includes('nested-secret'), false);
+  +
+  +  const untrustedCode = buildCodexRetryReason({
+  +    status: 503,
+  +    code: 'sk_live_secret',
+  +  });
+  +  assert.equal(Object.hasOwn(untrustedCode, 'code'), false);
+  +});
+  +
+  +test('classifies safe retry reasons for every retry family', () => {
+  +  assert.equal(buildCodexRetryReason(new CodexInactivityTimeoutError(5_000)).category, 'inactivity');
+  +  assert.equal(buildCodexRetryReason({ code: 'model_at_capacity' }).category, 'capacity');
+  +  assert.equal(buildCodexRetryReason({ status: 429 }).category, 'rate_limit');
+  +  assert.equal(buildCodexRetryReason({ statusCode: 502 }).category, 'http_5xx');
+  +  assert.equal(buildCodexRetryReason({ code: 'ECONNRESET' }).category, 'network');
+  +  assert.equal(buildCodexRetryReason(new Error('retryable but unclassified')).category, 'retryable_error');
+  +});
+  +
+  +test('uses a ten minute inactivity timeout with positive integer overrides', () => {
+  +  assert.equal(CODEX_INACTIVITY_TIMEOUT_MS, 600_000);
+  +  assert.equal(resolveCodexInactivityTimeoutMs(undefined), 600_000);
+  +  assert.equal(resolveCodexInactivityTimeoutMs(''), 600_000);
+  +  assert.equal(resolveCodexInactivityTimeoutMs('45000'), 45_000);
+  +
+  +  for (const value of ['0', '-1', '1.5', 'invalid']) {
+  +    assert.equal(resolveCodexInactivityTimeoutMs(value), 600_000, value);
+  +  }
+  +});
+  +
+  +test('inactivity timeout aborts only the current attempt with a retryable error', async () => {
+  +  const turnAbortController = new AbortController();
+  +  let timerCallback;
+  +  let requestedDelay;
+  +  let clearedTimer;
+  +  const timers = {
+  +    setTimeout(callback, delay) {
+  +      timerCallback = callback;
+  +      requestedDelay = delay;
+  +      return 41;
+  +    },
+  +    clearTimeout(timer) {
+  +      clearedTimer = timer;
+  +    },
+  +  };
+  +
+  +  const waiting = withCodexInactivityTimeout(new Promise(() => {}), {
+  +    timeoutMs: 1_234,
+  +    turnAbortController,
+  +    timers,
+  +  });
+  +  assert.equal(requestedDelay, 1_234);
+  +  timerCallback();
+  +
+  +  await assert.rejects(waiting, (error) => {
+  +    assert.ok(error instanceof CodexInactivityTimeoutError);
+  +    assert.equal(error.code, 'CODEX_STREAM_INACTIVITY_TIMEOUT');
+  +    assert.equal(isRetryableCodexError(error), true);
+  +    assert.equal(turnAbortController.signal.reason, error);
+  +    return true;
+  +  });
+  +  assert.equal(turnAbortController.signal.aborted, true);
+  +  assert.equal(clearedTimer, 41);
+  +});
+  +
+  +test('classifies capacity, rate limit, server, and transport failures as retryable', () => {
+  ... (317 lines truncated)
+  +417 -0
+
+ai-bridge/services/codex/message-service.js
+  @@ -34,6 +34,95 @@ import {
+  +import {
+  +  resolveCodexInactivityTimeoutMs,
+  +  runCodexTurnWithRetry,
+  +  withCodexInactivityTimeout,
+  +} from './codex-retry.js';
+  +
+  +function withCodexEventInactivityWatchdog(events, options) {
+  +  if (!events || typeof events[Symbol.asyncIterator] !== 'function') return events;
+  +
+  +  return {
+  +    async *[Symbol.asyncIterator]() {
+  +      const iterator = events[Symbol.asyncIterator]();
+  +      try {
+  +        while (true) {
+  +          const result = await withCodexInactivityTimeout(iterator.next(), options);
+  +          if (result.done) return;
+  +          yield result.value;
+  +        }
+  +      } finally {
+  +        const closing = iterator.return?.();
+  +        closing?.catch?.(() => {});
+  +      }
+  +    },
+  +  };
+  +}
+  +
+  +function emitCodexRetryState(payload) {
+  +  process.stdout.write(`[CODEX_RETRY] ${JSON.stringify(payload)}\n`);
+  +}
+  +
+  +export async function runCodexMessageAttempts({
+  +  thread,
+  +  runInput,
+  +  state,
+  +  config,
+  +  signal,
+  +  processEvents = processCodexEventStream,
+  +  prepareReplayBoundary = prepareSessionReplayBoundary,
+  +  sleep,
+  +  inactivityTimeoutMs,
+  +  inactivityTimers,
+  +  onStreamStart,
+  +  onRetry,
+  +  onAttemptStart,
+  +  now,
+  +}) {
+  +  let streamStarted = false;
+  +  const resolvedInactivityTimeoutMs = resolveCodexInactivityTimeoutMs(
+  +    inactivityTimeoutMs ?? process.env.CCGUI_CODEX_INACTIVITY_TIMEOUT_MS,
+  +  );
+  +  emitCodexRetryState({ phase: 'attempt_started', retryCount: 0 });
+  +  await runCodexTurnWithRetry({
+  +    state,
+  +    signal,
+  +    sleep,
+  +    now,
+  +    onRetry: ({ error, retryCount, delayMs, retryAt, reason }) => {
+  +      emitCodexRetryState({ phase: 'scheduled', retryCount, delayMs, retryAt, reason });
+  +      onRetry?.({ error, retryCount, delayMs, retryAt, reason });
+  +    },
+  +    onAttemptStart: ({ retryCount }) => {
+  +      emitCodexRetryState({ phase: 'attempt_started', retryCount });
+  +      onAttemptStart?.({ retryCount });
+  +    },
+  +    runAttempt: async ({ turnAbortController, retryCount }) => {
+  +      if (retryCount > 0) {
+  +        await prepareReplayBoundary(state, state.currentThreadId || config.threadId || null);
+  +      }
+  +      const { events } = await withCodexInactivityTimeout(
+  +        thread.runStreamed(runInput, { signal: turnAbortController.signal }),
+  +        {
+  +          timeoutMs: resolvedInactivityTimeoutMs,
+  +          turnAbortController,
+  +          timers: inactivityTimers,
+  +        },
+  +      );
+  +      if (!streamStarted) {
+  +        streamStarted = true;
+  +        onStreamStart?.();
+  +      }
+  +      const watchedEvents = withCodexEventInactivityWatchdog(events, {
+  +        timeoutMs: resolvedInactivityTimeoutMs,
+  +        turnAbortController,
+  +        timers: inactivityTimers,
+  +      });
+  +      await processEvents(watchedEvents, state, { ...config, turnAbortController });
+  +    },
+  +  });
+  +}
+   
+   // ---------------------------------------------------------------------------
+   // sendMessage
+  @@ -260,13 +349,6 @@ export async function sendMessage(
+  -    const turnAbortController = new AbortController();
+  -    const { events } = await thread.runStreamed(runInput, {
+  -      signal: turnAbortController.signal
+  -    });
+  -    console.log('[STREAM_START]');
+  -    streamStarted = true;
+  -
+       // ============================================================
+       // 7. Delegate Event Processing to codex-event-handler
+       // ============================================================
+  @@ -276,12 +358,21 @@ export async function sendMessage(
+  -      turnAbortController,
+  -      onTurnCompleted: emitStreamEndOnce,
+  -      onTurnFailed: emitStreamEndOnce
+  +      onTurnCompleted: emitStreamEndOnce
+       };
+   
+  -    await processCodexEventStream(events, state, config);
+  +    const operationAbortController = new AbortController();
+  +    await runCodexMessageAttempts({
+  +      thread,
+  +      runInput,
+  +      state,
+  +      config,
+  +      signal: operationAbortController.signal,
+  +      onStreamStart: () => {
+  +        console.log('[STREAM_START]');
+  +        streamStarted = true;
+  +      },
+  +    });
+       emitStreamEndOnce();
+   
+       // ============================================================
+  +102 -11
+
+ai-bridge/services/codex/message-service.retry.test.js
+  @@ -0,0 +1,308 @@
+  +import test from 'node:test';
+  +import assert from 'node:assert/strict';
+  +import { readFileSync } from 'node:fs';
+  +import { runCodexMessageAttempts } from './message-service.js';
+  +import { CodexTurnFailure } from './codex-retry.js';
+  +
+  +async function captureStdout(fn) {
+  +  const original = process.stdout.write.bind(process.stdout);
+  +  const captured = [];
+  +  process.stdout.write = (chunk) => {
+  +    captured.push(typeof chunk === 'string' ? chunk : chunk.toString());
+  +    return true;
+  +  };
+  +  try {
+  +    await fn(captured);
+  +  } finally {
+  +    process.stdout.write = original;
+  +  }
+  +  return captured;
+  +}
+  +
+  +function retryPayloads(captured) {
+  +  return captured
+  +    .filter((line) => line.startsWith('[CODEX_RETRY] '))
+  +    .map((line) => JSON.parse(line.slice('[CODEX_RETRY] '.length)));
+  +}
+  +
+  +test('main send path does not expose raw retry errors through status messages', () => {
+  +  const source = readFileSync(new URL('./message-service.js', import.meta.url), 'utf8');
+  +  const sendMessageSource = source.slice(source.indexOf('export async function sendMessage'));
+  +
+  +  assert.doesNotMatch(sendMessageSource, /onRetry:\s*\(\{\s*error/);
+  +  assert.doesNotMatch(sendMessageSource, /Codex request failed \(\$\{reason\}\)/);
+  +});
+  +
+  +test('emits the initial attempt state before invoking the Codex SDK', async () => {
+  +  const captured = await captureStdout(async (lines) => {
+  +    await runCodexMessageAttempts({
+  +      thread: {
+  +        async runStreamed() {
+  +          assert.deepEqual(retryPayloads(lines), [
+  +            { phase: 'attempt_started', retryCount: 0 },
+  +          ]);
+  +          return { events: [] };
+  +        },
+  +      },
+  +      runInput: 'start visibly',
+  +      state: {},
+  +      config: {},
+  +      processEvents: async () => {},
+  +    });
+  +  });
+  +
+  +  assert.deepEqual(retryPayloads(captured), [
+  +    { phase: 'attempt_started', retryCount: 0 },
+  +  ]);
+  +});
+  +
+  +test('emits safe scheduled and attempt-started retry lifecycle lines', async () => {
+  +  const order = [];
+  +  let attempts = 0;
+  +  const nestedSecret = 'nested-response-secret';
+  +  const thread = {
+  +    async runStreamed() {
+  +      attempts += 1;
+  +      order.push(`run:${attempts}`);
+  +      if (attempts === 1) {
+  +        throw new CodexTurnFailure('HTTP 503\nAuthorization: Bearer top-secret', {
+  +          status: 503,
+  +          response: { body: nestedSecret },
+  +        });
+  +      }
+  +      return { events: [] };
+  +    },
+  +  };
+  +
+  +  const captured = await captureStdout(async (lines) => {
+  +    await runCodexMessageAttempts({
+  +      thread,
+  +      runInput: 'retry me',
+  +      state: {},
+  +      config: {},
+  +      processEvents: async () => {},
+  +      now: () => 1_000,
+
+... (more changes truncated)
+  +84 -0
+[full diff: rtk git diff --no-compact]
