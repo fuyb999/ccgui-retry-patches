@@ -85,10 +85,14 @@ create_fixture() {
     '    printf "build-plugin\\n" >> build-gates.log' \
     '    mkdir -p build/distributions' \
     '    package_dir="$(mktemp -d)"' \
-    '    mkdir -p "$package_dir/ccgui"' \
+    '    jar_dir="$(mktemp -d)"' \
+    '    mkdir -p "$package_dir/ccgui/lib" "$jar_dir/META-INF" "$jar_dir/html"' \
+    '    printf "<idea-plugin><version>0.5-retry.1</version></idea-plugin>\\n" > "$jar_dir/META-INF/plugin.xml"' \
+    '    printf "<script>window.onCodexRetryState = true;</script><div class=codex-retry-status></div>\\n" > "$jar_dir/html/claude-chat.html"' \
+    '    (cd "$jar_dir" && zip -qr "$package_dir/ccgui/lib/ccgui-0.5.jar" .)' \
     '    (cd ai-bridge && zip -qr "$package_dir/ccgui/ai-bridge.zip" .)' \
     '    (cd "$package_dir" && zip -qr "$OLDPWD/build/distributions/ccgui-0.5.zip" ccgui)' \
-    '    rm -rf "$package_dir"' \
+    '    rm -rf "$package_dir" "$jar_dir"' \
     '    ;;' \
     '  *) exit 2 ;;' \
     'esac' \
@@ -122,6 +126,7 @@ create_fixture() {
       version: "v0.5",
       upstream: { repository: $repository, tag: "v0.5", commit: $commit },
       pluginVersion: "0.5",
+      patchedPluginVersion: "0.5-retry.1",
       bridgeVersion: "1.0.0",
       sourceHashes: {
         "ai-bridge/services/codex/message-service.js": $messageHash,
@@ -207,8 +212,21 @@ test_latest_release_has_versioned_retry_inputs() {
     .upstream.tag == "v0.5.2" and
     .upstream.commit == "077cccff6707c11796fb0fbd3445b66abd97f83e" and
     .pluginVersion == "0.5.2" and
-    .artifact == "ccgui-0.5.2-retry.1.zip"
+    .patchedPluginVersion == "0.5.2-retry.2" and
+    .artifact == "ccgui-0.5.2-retry.2.zip"
   ' "$manifest" >/dev/null || fail "v0.5.2 manifest is not pinned to the latest release"
+}
+
+test_artifact_verifier_checks_plugin_metadata_and_webview() {
+  local verifier
+  verifier="$(<"$VERIFY_SCRIPT")"
+  for marker in \
+    'META-INF/plugin.xml' \
+    'html/claude-chat.html' \
+    'onCodexRetryState' \
+    'codex-retry-status'; do
+    [[ "$verifier" == *"$marker"* ]] || fail "artifact verifier does not check: $marker"
+  done
 }
 
 test_manifest_hashes_cover_patched_existing_files() {
@@ -252,5 +270,6 @@ test_source_hash_mismatch_is_rejected
 test_patch_failure_is_rejected
 test_retry_progress_patch_contains_bridge_and_ui_protocol
 test_latest_release_has_versioned_retry_inputs
+test_artifact_verifier_checks_plugin_metadata_and_webview
 test_manifest_hashes_cover_patched_existing_files
 printf 'PASS: patch workflow\n'

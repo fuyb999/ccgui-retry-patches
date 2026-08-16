@@ -8,7 +8,7 @@ hash set, and ordered Git patch list. Patches are never applied across versions.
 
 | CC GUI | Upstream commit | Patch artifact |
 | --- | --- | --- |
-| `v0.5.2` | `077cccff6707c11796fb0fbd3445b66abd97f83e` | `dist/ccgui-0.5.2-retry.1.zip` |
+| `v0.5.2` | `077cccff6707c11796fb0fbd3445b66abd97f83e` | `dist/ccgui-0.5.2-retry.2.zip` |
 | `v0.5` | `76247b2001c17ff4de28b98458b5e7ed0860962e` | `dist/ccgui-0.5-retry.4.zip` |
 
 ## Retry Policy
@@ -36,11 +36,12 @@ crossing the IDEA/WebView boundary and contains only a retry phase, attempt
 number, absolute retry deadline, and an allowlisted category/status/code reason.
 Arbitrary upstream error messages never cross the retry progress bridge. While
 waiting, CC GUI shows the retry number, safe reason, and a live 30-second
-countdown. The initial attempt and every retry attempt remain explicitly marked
-as running and waiting for output. `onStreamStart`, historical messages, and an
-empty assistant placeholder do not falsely restore ordinary loading. Retry
-progress clears only after current-turn text, thinking, tool activity, or a
-terminal event reaches the UI. The bridge does not emit `[STREAM_END]`,
+countdown in a fixed status strip above the input, independent of message
+scroll position. The initial attempt and every retry attempt remain explicitly
+marked as running and waiting for output. `onStreamStart`, historical messages,
+and an empty assistant placeholder do not falsely restore ordinary loading.
+Retry progress clears only after current-turn text, thinking, tool activity, or
+a terminal event reaches the UI. The bridge does not emit `[STREAM_END]`,
 `[SEND_ERROR]`, or a final failure JSON between retry attempts.
 
 The two lifecycle payloads are:
@@ -120,7 +121,8 @@ Run source preparation and patched tests without Gradle packaging:
 rtk scripts/build.sh v0.5.2 --prepare-only
 ```
 
-Verify an existing artifact, checksum, outer plugin ZIP, and embedded bridge:
+Verify an existing artifact, checksum, outer plugin ZIP, patched plugin version,
+embedded WebView retry UI, and bridge:
 
 ```bash
 rtk scripts/verify.sh v0.5.2
@@ -131,10 +133,11 @@ rtk scripts/verify.sh v0.5.2
 1. Open IDEA settings.
 2. Go to **Plugins**.
 3. Open the gear menu and choose **Install Plugin from Disk**.
-4. Select `dist/ccgui-0.5.2-retry.1.zip`.
+4. Select `dist/ccgui-0.5.2-retry.2.zip`.
 5. Restart the IDE when prompted.
 
-The scripts never overwrite the currently installed plugin.
+IDEA reports this patched build as plugin version `0.5.2-retry.2`. The scripts
+never overwrite the currently installed plugin.
 
 ## Add A Version
 

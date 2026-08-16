@@ -41,6 +41,7 @@ load_manifest() {
     (.upstream.tag | type == "string") and
     (.upstream.commit | test("^[0-9a-f]{40}$")) and
     (.pluginVersion | type == "string") and
+    (.patchedPluginVersion | type == "string" and length > 0) and
     (.bridgeVersion | type == "string") and
     (.sourceHashes | type == "object" and length > 0) and
     (.patches | type == "array" and length > 0) and
@@ -55,6 +56,7 @@ load_manifest() {
   UPSTREAM_TAG="$(jq -r '.upstream.tag' "$MANIFEST")"
   UPSTREAM_COMMIT="$(jq -r '.upstream.commit' "$MANIFEST")"
   PLUGIN_VERSION="$(jq -r '.pluginVersion' "$MANIFEST")"
+  PATCHED_PLUGIN_VERSION="$(jq -r '.patchedPluginVersion' "$MANIFEST")"
   BRIDGE_VERSION="$(jq -r '.bridgeVersion' "$MANIFEST")"
   ARTIFACT_NAME="$(jq -r '.artifact' "$MANIFEST")"
   WORK_ROOT="${CCGUI_WORK_DIR_OVERRIDE:-$ROOT_DIR/work}"

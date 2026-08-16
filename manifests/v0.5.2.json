@@ -7,8 +7,10 @@
     "commit": "077cccff6707c11796fb0fbd3445b66abd97f83e"
   },
   "pluginVersion": "0.5.2",
+  "patchedPluginVersion": "0.5.2-retry.2",
   "bridgeVersion": "1.0.0",
   "sourceHashes": {
+    "build.gradle": "1ac8665aa2757cf76a041285c77f8dc13caef5a6f34ac184a81502e19f01af0d",
     "ai-bridge/services/codex/codex-event-handler.js": "a2bdf050089bb2ac8d07554aea469bb9e533ff995b6a17862ac88825743519b5",
     "ai-bridge/services/codex/codex-event-handler.test.js": "9605fc14bda2b4dac2623e556a5bcba85ff6992847fddad86e0781d6f23bdeee",
     "ai-bridge/services/codex/message-service.js": "63963fb93aebe746278deeeda661034452613d9abb258650d2eb01d90d062f1f",
@@ -25,6 +27,7 @@
     "src/test/java/com/github/claudecodegui/ui/ChatWindowDelegateTest.java": "99ec5269f475bf3de433dccfc8e11756833c87517bd881007e35f1acacf2ab46",
     "webview/src/App.tsx": "bebb45224b046f8079a1768fedcc26d83fc4360089fc7ff4fefbe502f2219e9c",
     "webview/src/components/ChatScreen.tsx": "40305446dac2c8b9200d9e81bba3d911e6fe3e07dc360a6fb3151f51ed551f2b",
+    "webview/src/components/MessageList.test.tsx": "380d5f59beb69c547258fa311442e029d47a49526de9f2781cec43a1cb27e41d",
     "webview/src/components/MessageList.tsx": "934ad81c15c0403bb19c0a336536dc2f12a538218c96245c332a079f11d6ed91",
     "webview/src/components/WaitingIndicator.tsx": "39efd2c324f9c330f2dfc93a02ee732b59e101603716a1d5df5b6467af288d49",
     "webview/src/contexts/MessagesContext.tsx": "5747a3085ddd11cb6ab9ea34163827898aa564e53845627b6b367d737d932eef",
@@ -44,7 +47,8 @@
     "webview/src/i18n/locales/pt-BR.json": "5477738c14da61d3e9097918cc5473f499a31412b3408321287abad20bcfb09f",
     "webview/src/i18n/locales/ru.json": "97edd9134b0972978ecddcbb92e4041027f962571928b4d0f2e511835bbe4b8f",
     "webview/src/i18n/locales/zh-TW.json": "050a59558322082de272d94237dae9373acaf84dde81dcbe34b2406c302aaa30",
-    "webview/src/i18n/locales/zh.json": "be1dc620aa6f3958ed4285a83cc499cc876c28e63ceae422b14fdbe9b8381631"
+    "webview/src/i18n/locales/zh.json": "be1dc620aa6f3958ed4285a83cc499cc876c28e63ceae422b14fdbe9b8381631",
+    "webview/src/styles/less/components/loading.less": "c961533a8432fcdeafdc4bbec0654b45d07f55e39a2e6ef03a7ac8eab08686d7"
   },
   "patches": [
     "patches/v0.5.2/0001-codex-infinite-retry.patch"
@@ -54,5 +58,5 @@
     "ai-bridge/services/codex/message-service.retry.test.js",
     "ai-bridge/services/codex/codex-event-handler.test.js"
   ],
-  "artifact": "ccgui-0.5.2-retry.1.zip"
+  "artifact": "ccgui-0.5.2-retry.2.zip"
 }

@@ -20,6 +20,30 @@ unzip -tq "$artifact" >/dev/null || die "Plugin ZIP integrity check failed: $art
 temp_dir="$(mktemp -d)"
 trap 'rm -rf "$temp_dir"' EXIT
 unzip -qq "$artifact" -d "$temp_dir/plugin"
+
+plugin_jars=()
+while IFS= read -r candidate; do
+  if unzip -Z1 "$candidate" | grep -Fxq 'META-INF/plugin.xml'; then
+    plugin_jars+=("$candidate")
+  fi
+done < <(find "$temp_dir/plugin" -type f -name '*.jar')
+[[ ${#plugin_jars[@]} -eq 1 ]] || \
+  die "Expected exactly one plugin JAR, found ${#plugin_jars[@]}"
+plugin_jar="${plugin_jars[0]}"
+
+plugin_xml="$(unzip -p "$plugin_jar" META-INF/plugin.xml)"
+if ! grep -Fq "<version>$PATCHED_PLUGIN_VERSION</version>" <<< "$plugin_xml"; then
+  die "Patched plugin version missing from META-INF/plugin.xml: $PATCHED_PLUGIN_VERSION"
+fi
+
+webview_html="$(unzip -p "$plugin_jar" html/claude-chat.html)" || \
+  die "Embedded WebView missing: html/claude-chat.html"
+for marker in onCodexRetryState codex-retry-status; do
+  if ! grep -Fq "$marker" <<< "$webview_html"; then
+    die "Embedded WebView retry marker missing: $marker"
+  fi
+done
+
 mapfile -t bridge_archives < <(find "$temp_dir/plugin" -type f -name ai-bridge.zip)
 [[ ${#bridge_archives[@]} -eq 1 ]] || \
   die "Expected exactly one embedded ai-bridge.zip, found ${#bridge_archives[@]}"
