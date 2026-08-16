@@ -60,4 +60,12 @@ for required_path in \
   fi
 done
 
+message_service_entry="$(printf '%s\n' "$bridge_entries" | grep -E '(^|/)services/codex/message-service\.js$' | head -n 1)"
+[[ -n "$message_service_entry" ]] || die "Embedded bridge message service missing"
+message_service="$(unzip -p "$bridge_archive" "$message_service_entry")" || \
+  die "Unable to read embedded Codex message service"
+if ! grep -Fq 'CODEX_SESSION_POLL_INTERVAL_MS' <<< "$message_service"; then
+  die "Embedded Codex session polling marker missing"
+fi
+
 printf 'Verified %s\n' "$artifact"

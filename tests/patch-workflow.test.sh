@@ -108,7 +108,10 @@ create_fixture() {
   FIXTURE_MESSAGE_HASH="$(sha256sum "$FIXTURE_REPO/ai-bridge/services/codex/message-service.js" | awk '{print $1}')"
   FIXTURE_HANDLER_HASH="$(sha256sum "$FIXTURE_REPO/ai-bridge/services/codex/codex-event-handler.js" | awk '{print $1}')"
 
-  printf "export const retryEnabled = true;\n" > "$FIXTURE_REPO/ai-bridge/services/codex/message-service.js"
+  printf '%s\n' \
+    "export const retryEnabled = true;" \
+    "export const CODEX_SESSION_POLL_INTERVAL_MS = 3000;" \
+    > "$FIXTURE_REPO/ai-bridge/services/codex/message-service.js"
   printf "export const retryDelayMs = 30000;\n" > "$FIXTURE_REPO/ai-bridge/services/codex/codex-retry.js"
   git -C "$FIXTURE_REPO" add -N ai-bridge/services/codex/codex-retry.js
   git -C "$FIXTURE_REPO" diff --binary > "$FIXTURE_PATCH"
@@ -201,6 +204,8 @@ test_retry_progress_patch_contains_bridge_and_ui_protocol() {
     fail "v0.5.2 visible-output guard missing"
   [[ "$patch" == *"keeps attempt state through history and an empty assistant snapshot"* ]] || \
     fail "v0.5.2 empty assistant regression test missing"
+  [[ "$patch" == *"CODEX_SESSION_POLL_INTERVAL_MS"* ]] || \
+    fail "v0.5.2 session polling marker missing"
 }
 
 test_latest_release_has_versioned_retry_inputs() {
@@ -213,8 +218,8 @@ test_latest_release_has_versioned_retry_inputs() {
     .upstream.tag == "v0.5.2" and
     .upstream.commit == "077cccff6707c11796fb0fbd3445b66abd97f83e" and
     .pluginVersion == "0.5.2" and
-    .patchedPluginVersion == "0.5.2-retry.2" and
-    .artifact == "ccgui-0.5.2-retry.2.zip"
+    .patchedPluginVersion == "0.5.2-retry.3" and
+    .artifact == "ccgui-0.5.2-retry.3.zip"
   ' "$manifest" >/dev/null || fail "v0.5.2 manifest is not pinned to the latest release"
 }
 
@@ -225,7 +230,8 @@ test_artifact_verifier_checks_plugin_metadata_and_webview() {
     'META-INF/plugin.xml' \
     'html/claude-chat.html' \
     'onCodexRetryState' \
-    'codex-retry-status'; do
+    'codex-retry-status' \
+    'CODEX_SESSION_POLL_INTERVAL_MS'; do
     [[ "$verifier" == *"$marker"* ]] || fail "artifact verifier does not check: $marker"
   done
 }

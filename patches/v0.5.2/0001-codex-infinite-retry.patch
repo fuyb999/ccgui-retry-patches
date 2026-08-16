@@ -1804,7 +1804,7 @@ index 00000000..c1fc49aa
 +  assert.equal(retryNotices[0].reason.category, 'inactivity');
 +});
 diff --git a/build.gradle b/build.gradle
-index 264cbfc4..3e7e6917 100644
+index 264cbfc4..86799a8c 100644
 --- a/build.gradle
 +++ b/build.gradle
 @@ -42,7 +42,7 @@ tasks.named('checkstyleTest') {
@@ -1812,7 +1812,7 @@ index 264cbfc4..3e7e6917 100644
  
  group = 'com.github.idea-claude-code-gui'
 -version = '0.5.2'
-+version = '0.5.2-retry.2'
++version = '0.5.2-retry.3'
  
  java {
      sourceCompatibility = JavaVersion.VERSION_17

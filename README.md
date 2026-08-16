@@ -8,7 +8,7 @@ hash set, and ordered Git patch list. Patches are never applied across versions.
 
 | CC GUI | Upstream commit | Patch artifact |
 | --- | --- | --- |
-| `v0.5.2` | `077cccff6707c11796fb0fbd3445b66abd97f83e` | `dist/ccgui-0.5.2-retry.2.zip` |
+| `v0.5.2` | `077cccff6707c11796fb0fbd3445b66abd97f83e` | `dist/ccgui-0.5.2-retry.3.zip` |
 | `v0.5` | `76247b2001c17ff4de28b98458b5e7ed0860962e` | `dist/ccgui-0.5-retry.4.zip` |
 
 ## Retry Policy
@@ -67,6 +67,12 @@ event starts a fresh interval, so it does not impose a total duration limit on
 active turns. Set `CCGUI_CODEX_INACTIVITY_TIMEOUT_MS` to a positive integer to
 override the 600,000 ms default. Invalid, zero, and negative values use the
 default.
+
+While an SDK event is pending, the `v0.5.2` bridge scans the current-turn
+session JSONL every three seconds. Reasoning summaries and tool records found
+there are forwarded in source order, so retry or compaction cannot leave the UI
+showing text without its thinking and tool activity. These local poll ticks do
+not reset the 10-minute SDK inactivity deadline, and SDK copies are deduplicated.
 
 Stopping the CC GUI task terminates the bridge process, which also terminates an
 active request or pending delay. In-process abort signals cancel both an active
@@ -133,10 +139,10 @@ rtk scripts/verify.sh v0.5.2
 1. Open IDEA settings.
 2. Go to **Plugins**.
 3. Open the gear menu and choose **Install Plugin from Disk**.
-4. Select `dist/ccgui-0.5.2-retry.2.zip`.
+4. Select `dist/ccgui-0.5.2-retry.3.zip`.
 5. Restart the IDE when prompted.
 
-IDEA reports this patched build as plugin version `0.5.2-retry.2`. The scripts
+IDEA reports this patched build as plugin version `0.5.2-retry.3`. The scripts
 never overwrite the currently installed plugin.
 
 ## Add A Version
