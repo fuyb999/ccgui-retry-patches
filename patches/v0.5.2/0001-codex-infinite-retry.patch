@@ -1,5 +1,5 @@
 diff --git a/ai-bridge/services/codex/codex-event-handler.js b/ai-bridge/services/codex/codex-event-handler.js
-index b519699c..b9c384c4 100644
+index b519699c..ffaefed3 100644
 --- a/ai-bridge/services/codex/codex-event-handler.js
 +++ b/ai-bridge/services/codex/codex-event-handler.js
 @@ -34,6 +34,7 @@ import {
@@ -10,7 +10,238 @@ index b519699c..b9c384c4 100644
  
  const COMMAND_DENIED_ABORT_ERROR = '__CODEX_COMMAND_DENIED_ABORT__';
  const CODEX_USAGE_FIELDS = [
-@@ -1061,11 +1062,8 @@ export async function processCodexEventStream(events, state, config) {
+@@ -273,7 +274,7 @@ export function createInitialEventState(emitMessage) {
+     sessionLineCursor: 0,
+     sessionReplayBaselineCursor: null,
+     sessionReplayBaselinePrepared: false,
+-    sessionFunctionCursor: null,
++    sessionStructuredCursor: null,
+     sessionTurnStartCursor: null,
+     sessionTurnBoundaryReady: false,
+     sessionTurnBoundaryWarningLogged: false,
+@@ -284,6 +285,7 @@ export function createInitialEventState(emitMessage) {
+     processedSessionCustomToolCallIds: new Set(),
+     processedSessionCustomToolOutputIds: new Set(),
+     reasoningTextCache: new Map(),
++    lastReasoningText: '',
+     assistantTextCache: new Map(),
+     reasoningObserved: false,
+     commandApprovalAbortRequested: false,
+@@ -352,7 +354,7 @@ function countSessionJsonlLines(content) {
+ export async function prepareSessionReplayBoundary(state, threadId) {
+   state.sessionReplayBaselinePrepared = true;
+   state.sessionReplayBaselineCursor = threadId ? null : 0;
+-  state.sessionFunctionCursor = null;
++  state.sessionStructuredCursor = null;
+   state.sessionTurnStartCursor = null;
+   state.sessionTurnBoundaryReady = false;
+   state.sessionTurnBoundaryWarningLogged = false;
+@@ -364,7 +366,7 @@ export async function prepareSessionReplayBoundary(state, threadId) {
+ 
+   const sessionPath = ensureSessionFilePath(state, threadId);
+   if (!sessionPath) {
+-    logWarn('SESSION_REPLAY', `Unable to locate resumed session ${threadId}; JSONL function replay is disabled for this turn.`);
++    logWarn('SESSION_REPLAY', `Unable to locate resumed session ${threadId}; JSONL structured replay is disabled for this turn.`);
+     return;
+   }
+ 
+@@ -374,7 +376,7 @@ export async function prepareSessionReplayBoundary(state, threadId) {
+     state.sessionReplayBaselineCursor = baseline;
+     state.sessionLineCursor = baseline;
+   } catch (error) {
+-    logWarn('SESSION_REPLAY', 'Unable to capture the pre-turn session boundary; JSONL function replay is disabled for this turn:', error?.message || error);
++    logWarn('SESSION_REPLAY', 'Unable to capture the pre-turn session boundary; JSONL structured replay is disabled for this turn:', error?.message || error);
+   }
+ }
+ 
+@@ -408,7 +410,7 @@ async function ensureSessionTurnBoundary(state, config) {
+ 
+     const boundaryCursor = i + 1;
+     state.sessionTurnStartCursor = boundaryCursor;
+-    state.sessionFunctionCursor = boundaryCursor;
++    state.sessionStructuredCursor = boundaryCursor;
+     state.sessionTurnBoundaryReady = true;
+     logDebug('SESSION_REPLAY', `Established current turn boundary at session line ${boundaryCursor}.`);
+     return true;
+@@ -420,7 +422,7 @@ async function ensureSessionTurnBoundary(state, config) {
+ function warnSessionTurnBoundaryNotReady(state) {
+   if (state.sessionTurnBoundaryWarningLogged) return;
+   state.sessionTurnBoundaryWarningLogged = true;
+-  logWarn('SESSION_REPLAY', 'Skipping JSONL function replay until a verified current-turn turn_context is available.');
++  logWarn('SESSION_REPLAY', 'Skipping JSONL structured replay until a verified current-turn turn_context is available.');
+ }
+ 
+ async function readLatestTurnContextFromSession(state, threadId) {
+@@ -516,27 +518,38 @@ async function collectPatchOperationsFromSession(state, config) {
+   return batches;
+ }
+ 
+-async function replayMissingFunctionCallsFromSession(state, config) {
++function extractSessionReasoningText(payload) {
++  if (typeof payload?.text === 'string') return payload.text.trim();
++  if (!Array.isArray(payload?.summary)) return '';
++  return payload.summary
++    .map((entry) => typeof entry === 'string' ? entry : entry?.text)
++    .filter((entry) => typeof entry === 'string' && entry.trim())
++    .join('\n')
++    .trim();
++}
++
++async function replayMissingStructuredEventsFromSession(state, config) {
+   if (!state.sessionTurnBoundaryReady || !Number.isInteger(state.sessionTurnStartCursor)) {
+-    return { toolUses: 0, toolResults: 0 };
++    return { reasoning: 0, toolUses: 0, toolResults: 0 };
+   }
+ 
+   const sessionPath = ensureSessionFilePath(state, getSessionThreadId(state, config));
+-  if (!sessionPath) return { toolUses: 0, toolResults: 0 };
++  if (!sessionPath) return { reasoning: 0, toolUses: 0, toolResults: 0 };
+ 
+   let content = '';
+   try { content = await readFile(sessionPath, 'utf8'); } catch (error) {
+-    logDebug('SESSION_REPLAY', 'Failed to read session file for function replay:', error?.message || error);
+-    return { toolUses: 0, toolResults: 0 };
++    logDebug('SESSION_REPLAY', 'Failed to read session file for structured replay:', error?.message || error);
++    return { reasoning: 0, toolUses: 0, toolResults: 0 };
+   }
+-  if (!content.trim()) return { toolUses: 0, toolResults: 0 };
++  if (!content.trim()) return { reasoning: 0, toolUses: 0, toolResults: 0 };
+ 
+   const lines = splitSessionJsonlEntries(content);
+   const startIndex = Math.max(
+     state.sessionTurnStartCursor,
+-    Number.isInteger(state.sessionFunctionCursor) ? state.sessionFunctionCursor : state.sessionTurnStartCursor,
++    Number.isInteger(state.sessionStructuredCursor) ? state.sessionStructuredCursor : state.sessionTurnStartCursor,
+   );
+ 
++  let reasoning = 0;
+   let toolUses = 0;
+   let toolResults = 0;
+ 
+@@ -550,6 +563,18 @@ async function replayMissingFunctionCallsFromSession(state, config) {
+ 
+     const payload = parsed.payload;
+     const payloadType = payload.type;
++    if (payloadType === 'reasoning') {
++      const text = extractSessionReasoningText(payload);
++      if (text && maybeEmitReasoning(state, {
++        ...payload,
++        id: `session_reasoning_${i}`,
++        text,
++      })) {
++        reasoning += 1;
++      }
++      continue;
++    }
++
+     if (payloadType === 'function_call') {
+       const callId = typeof payload.call_id === 'string' && payload.call_id ? payload.call_id : `line_${i}`;
+       if (state.processedSessionFunctionCallIds.has(callId)) continue;
+@@ -590,16 +615,16 @@ async function replayMissingFunctionCallsFromSession(state, config) {
+     }
+   }
+ 
+-  state.sessionFunctionCursor = lines.length;
+-  return { toolUses, toolResults };
++  state.sessionStructuredCursor = lines.length;
++  return { reasoning, toolUses, toolResults };
+ }
+ 
+-async function replayMissingFunctionCallsDuringStream(state, config) {
++async function replayMissingStructuredEventsDuringStream(state, config) {
+   if (!await ensureSessionTurnBoundary(state, config)) {
+     warnSessionTurnBoundaryNotReady(state);
+-    return { toolUses: 0, toolResults: 0 };
++    return { reasoning: 0, toolUses: 0, toolResults: 0 };
+   }
+-  return replayMissingFunctionCallsFromSession(state, config);
++  return replayMissingStructuredEventsFromSession(state, config);
+ }
+ 
+ function buildPermissionInputForPatchOperation(operation) {
+@@ -763,20 +788,27 @@ function emitThinkingBlock(state, text) {
+ }
+ 
+ function maybeEmitReasoning(state, item) {
+-  if (!item || item.type !== 'reasoning') return;
++  if (!item || item.type !== 'reasoning') return false;
+   const raw = typeof item.text === 'string' ? item.text : '';
+   const text = raw.trim();
+-  if (!text) return;
++  if (!text) return false;
+   const stableId = getStableItemId(item) ?? randomUUID();
+   const previousText = state.reasoningTextCache.get(stableId) ?? '';
+-  const delta = extractAppendedDelta(previousText, text);
+-  if (!delta && previousText === text) return;
++  if (previousText === text) return false;
+   state.reasoningTextCache.set(stableId, text);
++
++  const lastText = typeof state.lastReasoningText === 'string' ? state.lastReasoningText : '';
++  if (lastText === text || (lastText && lastText.startsWith(text))) return false;
++  const delta = lastText && text.startsWith(lastText)
++    ? text.slice(lastText.length)
++    : extractAppendedDelta(previousText, text);
++  state.lastReasoningText = text;
+   state.reasoningObserved = true;
+   if (delta) {
+     emitThinkingDelta(delta);
+   }
+   emitThinkingBlock(state, text);
++  return true;
+ }
+ 
+ async function maybeLogRuntimePolicy(state, config) {
+@@ -964,7 +996,12 @@ export async function processCodexEventStream(events, state, config) {
+         if (state.turnStarted && event?.payload?.type === 'token_count') {
+           handleTokenCountEvent(event, state);
+         }
+-        await replayMissingFunctionCallsDuringStream(state, config);
++        await replayMissingStructuredEventsDuringStream(state, config);
++        break;
++      }
++
++      case 'session.poll': {
++        await replayMissingStructuredEventsDuringStream(state, config);
+         break;
+       }
+ 
+@@ -997,7 +1034,7 @@ export async function processCodexEventStream(events, state, config) {
+           }
+           rememberToolInvocation(state, toolUseId, toolName, toolInput);
+         }
+-        await replayMissingFunctionCallsDuringStream(state, config);
++        await replayMissingStructuredEventsDuringStream(state, config);
+         break;
+       }
+ 
+@@ -1006,22 +1043,22 @@ export async function processCodexEventStream(events, state, config) {
+         if (event.item && event.item.type === 'agent_message') {
+           handleAgentMessage(event.item, state, { emitSnapshot: false });
+         }
+-        await replayMissingFunctionCallsDuringStream(state, config);
++        await replayMissingStructuredEventsDuringStream(state, config);
+         break;
+ 
+       case 'item.completed': {
+         if (!event.item) break;
+         await handleItemCompleted(event.item, state, config);
+-        await replayMissingFunctionCallsDuringStream(state, config);
++        await replayMissingStructuredEventsDuringStream(state, config);
+         break;
+       }
+ 
+       case 'turn.completed': {
+         state.turnCompleted = true;
+         console.log('[DEBUG] Turn completed');
+-        const replayed = await replayMissingFunctionCallsDuringStream(state, config);
++        const replayed = await replayMissingStructuredEventsDuringStream(state, config);
+         if (replayed.toolUses > 0 || replayed.toolResults > 0) {
+-          console.log('[DEBUG] Replayed session function calls:', JSON.stringify(replayed));
++          console.log('[DEBUG] Replayed session structured events:', JSON.stringify(replayed));
+         }
+         const replayedTokenCounts = await replayCurrentTurnTokenCountsFromSession(state, config);
+         if (replayedTokenCounts > 0) {
+@@ -1061,11 +1098,8 @@ export async function processCodexEventStream(events, state, config) {
            logInfo('PERM_DEBUG', `Ignore turn.failed after command denial abort: ${errorMsg}`);
            break;
          }
@@ -23,7 +254,7 @@ index b519699c..b9c384c4 100644
        }
  
        case 'error': {
-@@ -1079,11 +1077,8 @@ export async function processCodexEventStream(events, state, config) {
+@@ -1079,11 +1113,8 @@ export async function processCodexEventStream(events, state, config) {
            logInfo('PERM_DEBUG', `Ignore error event after command denial abort: ${generalError}`);
            break;
          }
@@ -37,7 +268,7 @@ index b519699c..b9c384c4 100644
  
        default: {
 diff --git a/ai-bridge/services/codex/codex-event-handler.test.js b/ai-bridge/services/codex/codex-event-handler.test.js
-index 5c4c9816..a1a90629 100644
+index 5c4c9816..1c12c3b9 100644
 --- a/ai-bridge/services/codex/codex-event-handler.test.js
 +++ b/ai-bridge/services/codex/codex-event-handler.test.js
 @@ -9,6 +9,7 @@ import {
@@ -92,6 +323,170 @@ index 5c4c9816..a1a90629 100644
 +});
 +
  test('custom_tool_call exec apply_patch emits edit and result messages without file_change', async () => {
+   const emittedMessages = [];
+   const state = createInitialEventState((message) => emittedMessages.push(message));
+@@ -156,6 +196,163 @@ test('current-turn session replay emits custom_tool_call exec patches found only
+   }
+ });
+ 
++test('session poll replays current-turn reasoning and tools in JSONL order', async () => {
++  const tempDirectory = await mkdtemp(join(tmpdir(), 'codex-structured-replay-'));
++  const tempSessionPath = join(tempDirectory, 'fixture-session.jsonl');
++  await writeFile(tempSessionPath, '', 'utf8');
++
++  try {
++    const emittedMessages = [];
++    const state = createInitialEventState((message) => emittedMessages.push(message));
++    state.sessionFilePath = tempSessionPath;
++    await prepareSessionReplayBoundary(state, 'fixture-thread');
++
++    await appendFile(
++      tempSessionPath,
++      [
++        { type: 'turn_context', payload: { cwd: '/fixture' } },
++        {
++          type: 'response_item',
++          payload: {
++            type: 'reasoning',
++            summary: [{ type: 'summary_text', text: 'Inspect the current state.' }],
++          },
++        },
++        {
++          type: 'response_item',
++          payload: {
++            type: 'function_call',
++            name: 'shell_command',
++            call_id: 'poll-call-1',
++            arguments: JSON.stringify({ command: 'printf ready' }),
++          },
++        },
++        {
++          type: 'response_item',
++          payload: {
++            type: 'function_call_output',
++            call_id: 'poll-call-1',
++            output: 'ready',
++          },
++        },
++      ].map((entry) => JSON.stringify(entry)).join('\n') + '\n',
++      'utf8',
++    );
++
++    const captured = await captureStdout(() => processCodexEventStream(
++      eventsFrom([{ type: 'session.poll' }]),
++      state,
++      { ...makeConfig(), threadId: 'fixture-thread' },
++    ));
++
++    const blocks = emittedMessages.flatMap((message) => message?.message?.content ?? []);
++    assert.deepEqual(blocks.map((block) => block.type), ['thinking', 'tool_use', 'tool_result']);
++    assert.equal(tagLines(captured, '[THINKING_DELTA]').length, 1);
++  } finally {
++    await rm(tempDirectory, { recursive: true, force: true });
++  }
++});
++
++test('session reasoning replay deduplicates a later SDK copy', async () => {
++  const tempDirectory = await mkdtemp(join(tmpdir(), 'codex-reasoning-dedup-'));
++  const tempSessionPath = join(tempDirectory, 'fixture-session.jsonl');
++  await writeFile(tempSessionPath, '', 'utf8');
++
++  try {
++    const emittedMessages = [];
++    const state = createInitialEventState((message) => emittedMessages.push(message));
++    state.sessionFilePath = tempSessionPath;
++    await prepareSessionReplayBoundary(state, 'fixture-thread');
++
++    await appendFile(
++      tempSessionPath,
++      [
++        { type: 'turn_context', payload: { cwd: '/fixture' } },
++        {
++          type: 'response_item',
++          payload: {
++            type: 'reasoning',
++            summary: [{ type: 'summary_text', text: 'Use the verified result.' }],
++          },
++        },
++      ].map((entry) => JSON.stringify(entry)).join('\n') + '\n',
++      'utf8',
++    );
++
++    const captured = await captureStdout(() => processCodexEventStream(
++      eventsFrom([
++        { type: 'session.poll' },
++        {
++          type: 'item.completed',
++          item: { id: 'sdk-reasoning-1', type: 'reasoning', text: 'Use the verified result.' },
++        },
++      ]),
++      state,
++      { ...makeConfig(), threadId: 'fixture-thread' },
++    ));
++
++    const thinkingBlocks = emittedMessages.flatMap((message) =>
++      message?.message?.content?.filter((block) => block.type === 'thinking') ?? []
++    );
++    assert.equal(thinkingBlocks.length, 1);
++    assert.equal(tagLines(captured, '[THINKING_DELTA]').length, 1);
++  } finally {
++    await rm(tempDirectory, { recursive: true, force: true });
++  }
++});
++
++test('session reasoning replay emits only an appended SDK reasoning suffix', async () => {
++  const tempDirectory = await mkdtemp(join(tmpdir(), 'codex-reasoning-prefix-'));
++  const tempSessionPath = join(tempDirectory, 'fixture-session.jsonl');
++  await writeFile(tempSessionPath, '', 'utf8');
++
++  try {
++    const emittedMessages = [];
++    const state = createInitialEventState((message) => emittedMessages.push(message));
++    state.sessionFilePath = tempSessionPath;
++    await prepareSessionReplayBoundary(state, 'fixture-thread');
++
++    await appendFile(
++      tempSessionPath,
++      [
++        { type: 'turn_context', payload: { cwd: '/fixture' } },
++        {
++          type: 'response_item',
++          payload: { type: 'reasoning', summary: [{ text: 'Inspect the result.' }] },
++        },
++      ].map((entry) => JSON.stringify(entry)).join('\n') + '\n',
++      'utf8',
++    );
++
++    const captured = await captureStdout(() => processCodexEventStream(
++      eventsFrom([
++        { type: 'session.poll' },
++        {
++          type: 'item.completed',
++          item: {
++            id: 'sdk-reasoning-extension',
++            type: 'reasoning',
++            text: 'Inspect the result. Continue with the fix.',
++          },
++        },
++      ]),
++      state,
++      { ...makeConfig(), threadId: 'fixture-thread' },
++    ));
++
++    const deltas = tagLines(captured, '[THINKING_DELTA]')
++      .map((line) => JSON.parse(line.slice('[THINKING_DELTA] '.length)));
++    assert.deepEqual(deltas, ['Inspect the result.', ' Continue with the fix.']);
++    assert.equal(
++      emittedMessages.flatMap((message) => message?.message?.content ?? [])
++        .filter((block) => block.type === 'thinking').length,
++      2,
++    );
++  } finally {
++    await rm(tempDirectory, { recursive: true, force: true });
++  }
++});
++
+ test('token_count forwards current context and derives turn usage from cumulative deltas', async () => {
    const emittedMessages = [];
    const state = createInitialEventState((message) => emittedMessages.push(message));
 diff --git a/ai-bridge/services/codex/codex-retry.js b/ai-bridge/services/codex/codex-retry.js
