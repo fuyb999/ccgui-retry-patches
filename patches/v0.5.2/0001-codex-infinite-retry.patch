@@ -2216,6 +2216,104 @@ index 3af159f3..4fabea6f 100644
          thinkingDeltaThrottler.append(delta);
      }
  
+diff --git a/src/main/java/com/github/claudecodegui/session/StreamMessageCoalescer.java b/src/main/java/com/github/claudecodegui/session/StreamMessageCoalescer.java
+index 37059022..30daf076 100644
+--- a/src/main/java/com/github/claudecodegui/session/StreamMessageCoalescer.java
++++ b/src/main/java/com/github/claudecodegui/session/StreamMessageCoalescer.java
+@@ -100,7 +100,9 @@ public class StreamMessageCoalescer {
+     record MessageTransport(
+             List<ClaudeSession.Message> messages,
+             int baseIndex,
+-            boolean tailUpdate
++            boolean tailUpdate,
++            ClaudeSession.Message anchorMessage,
++            int anchorIndex
+     ) {}
+ 
+     public StreamMessageCoalescer(JsCallbackTarget callbackTarget) {
+@@ -328,11 +330,18 @@ public class StreamMessageCoalescer {
+             final int payloadChars;
+             final long payloadBuildMs;
+             final String escapedMessagesJson;
++            final String escapedAssistantAnchorJson;
+             try {
+                 long buildStartedAt = System.nanoTime();
+                 String messagesJson = MessageJsonConverter.convertMessagesToJson(transportMessages);
+-                payloadChars = messagesJson.length();
++                String assistantAnchorJson = transport.anchorMessage() != null
++                        ? MessageJsonConverter.convertMessagesToJson(List.of(transport.anchorMessage()))
++                        : null;
++                payloadChars = messagesJson.length()
++                        + (assistantAnchorJson != null ? assistantAnchorJson.length() : 0);
+                 escapedMessagesJson = JsUtils.escapeJs(messagesJson);
++                escapedAssistantAnchorJson = assistantAnchorJson != null
++                        ? JsUtils.escapeJs(assistantAnchorJson) : null;
+                 payloadBuildMs = java.util.concurrent.TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - buildStartedAt);
+ 
+                 // FIX: Record payload size for adaptive throttling
+@@ -343,6 +352,7 @@ public class StreamMessageCoalescer {
+                             + ", messages=" + messages.size()
+                             + ", transportedMessages=" + transportMessages.size()
+                             + ", tailBaseIndex=" + tailBaseIndex
++                            + ", anchorIndex=" + transport.anchorIndex()
+                             + ", buildMs=" + payloadBuildMs
+                             + ", sequence=" + sequence);
+                 } else if (LOG.isDebugEnabled()) {
+@@ -412,11 +422,21 @@ public class StreamMessageCoalescer {
+                 // the onStreamEnd signal, failing to run it permanently freezes the UI.
+                 try {
+                     if (tailUpdate) {
+-                        callbackTarget.callJavaScript(
+-                                "updateMessageTail",
+-                                escapedMessagesJson,
+-                                String.valueOf(tailBaseIndex),
+-                                String.valueOf(pushSequence));
++                        if (escapedAssistantAnchorJson != null) {
++                            callbackTarget.callJavaScript(
++                                    "updateMessageTail",
++                                    escapedMessagesJson,
++                                    String.valueOf(tailBaseIndex),
++                                    String.valueOf(pushSequence),
++                                    escapedAssistantAnchorJson,
++                                    String.valueOf(transport.anchorIndex()));
++                        } else {
++                            callbackTarget.callJavaScript(
++                                    "updateMessageTail",
++                                    escapedMessagesJson,
++                                    String.valueOf(tailBaseIndex),
++                                    String.valueOf(pushSequence));
++                        }
+                     } else {
+                         callbackTarget.callJavaScript("updateMessages", escapedMessagesJson, String.valueOf(pushSequence));
+                     }
+@@ -459,7 +479,26 @@ public class StreamMessageCoalescer {
+         int baseIndex = tailUpdate ? candidateBaseIndex : 0;
+         List<ClaudeSession.Message> transportMessages = tailUpdate
+                 ? List.copyOf(messages.subList(baseIndex, messages.size())) : messages;
+-        return new MessageTransport(transportMessages, baseIndex, tailUpdate);
++        int lastAssistantIndex = tailUpdate ? findLastAssistantIndex(messages) : -1;
++        boolean assistantOmitted = lastAssistantIndex >= 0 && lastAssistantIndex < baseIndex;
++        ClaudeSession.Message anchorMessage = assistantOmitted
++                ? messages.get(lastAssistantIndex) : null;
++        int anchorIndex = assistantOmitted ? lastAssistantIndex : -1;
++        return new MessageTransport(
++                transportMessages,
++                baseIndex,
++                tailUpdate,
++                anchorMessage,
++                anchorIndex);
++    }
++
++    private static int findLastAssistantIndex(List<ClaudeSession.Message> messages) {
++        for (int index = messages.size() - 1; index >= 0; index--) {
++            if (messages.get(index).type == ClaudeSession.Message.Type.ASSISTANT) {
++                return index;
++            }
++        }
++        return -1;
+     }
+ 
+     private static boolean hasSamePrefix(List<ClaudeSession.Message> previousMessages,
 diff --git a/src/main/java/com/github/claudecodegui/ui/ChatWindowDelegate.java b/src/main/java/com/github/claudecodegui/ui/ChatWindowDelegate.java
 index 6c53c571..50645112 100644
 --- a/src/main/java/com/github/claudecodegui/ui/ChatWindowDelegate.java
@@ -2467,6 +2565,65 @@ index 1304649e..7392b1aa 100644
      @Test
      public void normalizeUsageValueRejectsNegativeValues() {
          assertEquals(0, SessionCallbackAdapter.normalizeUsageValue(-1));
+diff --git a/src/test/java/com/github/claudecodegui/session/StreamMessageCoalescerStreamEndHookTest.java b/src/test/java/com/github/claudecodegui/session/StreamMessageCoalescerStreamEndHookTest.java
+index 11263499..0f1ff834 100644
+--- a/src/test/java/com/github/claudecodegui/session/StreamMessageCoalescerStreamEndHookTest.java
++++ b/src/test/java/com/github/claudecodegui/session/StreamMessageCoalescerStreamEndHookTest.java
+@@ -10,6 +10,7 @@ import java.util.concurrent.atomic.AtomicInteger;
+ 
+ import static org.junit.Assert.assertEquals;
+ import static org.junit.Assert.assertFalse;
++import static org.junit.Assert.assertNull;
+ import static org.junit.Assert.assertTrue;
+ 
+ /**
+@@ -155,6 +156,46 @@ public class StreamMessageCoalescerStreamEndHookTest {
+         assertEquals(rebuilt, transport.messages());
+     }
+ 
++    @Test
++    public void tailCarriesTheLastAssistantAsAnAnchorWhenTheTailOmitsIt() {
++        List<ClaudeSession.Message> previous = messages(400);
++        ClaudeSession.Message assistant = new ClaudeSession.Message(
++                ClaudeSession.Message.Type.ASSISTANT, "current answer");
++        previous.set(100, assistant);
++        List<ClaudeSession.Message> growing = new ArrayList<>(previous);
++        for (int i = 400; i < 500; i++) {
++            growing.add(new ClaudeSession.Message(
++                    ClaudeSession.Message.Type.USER, "tool-result-" + i));
++        }
++
++        StreamMessageCoalescer.MessageTransport transport =
++                StreamMessageCoalescer.selectMessageTransport(growing, previous);
++
++        assertTrue(transport.tailUpdate());
++        assertEquals(320, transport.baseIndex());
++        assertEquals(100, transport.anchorIndex());
++        assertEquals(assistant, transport.anchorMessage());
++    }
++
++    @Test
++    public void tailDoesNotCarryAnAnchorWhenTheLastAssistantIsInsideIt() {
++        List<ClaudeSession.Message> previous = messages(300);
++        List<ClaudeSession.Message> growing = new ArrayList<>(previous);
++        for (int i = 300; i < 400; i++) {
++            ClaudeSession.Message.Type type = i == 399
++                    ? ClaudeSession.Message.Type.ASSISTANT
++                    : ClaudeSession.Message.Type.USER;
++            growing.add(new ClaudeSession.Message(type, "message-" + i));
++        }
++
++        StreamMessageCoalescer.MessageTransport transport =
++                StreamMessageCoalescer.selectMessageTransport(growing, previous);
++
++        assertTrue(transport.tailUpdate());
++        assertEquals(-1, transport.anchorIndex());
++        assertNull(transport.anchorMessage());
++    }
++
+     private static List<ClaudeSession.Message> messages(int count) {
+         List<ClaudeSession.Message> messages = new ArrayList<>();
+         for (int i = 0; i < count; i++) {
 diff --git a/src/test/java/com/github/claudecodegui/ui/ChatWindowDelegateTest.java b/src/test/java/com/github/claudecodegui/ui/ChatWindowDelegateTest.java
 index cfc0d9a4..639f0a2a 100644
 --- a/src/test/java/com/github/claudecodegui/ui/ChatWindowDelegateTest.java
