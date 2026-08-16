@@ -86,10 +86,11 @@ create_fixture() {
     '    mkdir -p build/distributions' \
     '    package_dir="$(mktemp -d)"' \
     '    jar_dir="$(mktemp -d)"' \
-    '    mkdir -p "$package_dir/ccgui/lib" "$jar_dir/META-INF" "$jar_dir/html"' \
+    '    mkdir -p "$package_dir/ccgui/lib" "$jar_dir/META-INF" "$jar_dir/html" "$jar_dir/filler"' \
     '    printf "<idea-plugin><version>0.5-retry.1</version></idea-plugin>\\n" > "$jar_dir/META-INF/plugin.xml"' \
     '    printf "<script>window.onCodexRetryState = true;</script><div class=codex-retry-status></div>\\n" > "$jar_dir/html/claude-chat.html"' \
-    '    (cd "$jar_dir" && zip -qr "$package_dir/ccgui/lib/ccgui-0.5.jar" .)' \
+    '    for i in $(seq 1 5000); do : > "$jar_dir/filler/entry-$i"; done' \
+    '    (cd "$jar_dir" && zip -qr "$package_dir/ccgui/lib/ccgui-0.5.jar" META-INF/plugin.xml html/claude-chat.html filler)' \
     '    (cd ai-bridge && zip -qr "$package_dir/ccgui/ai-bridge.zip" .)' \
     '    (cd "$package_dir" && zip -qr "$OLDPWD/build/distributions/ccgui-0.5.zip" ccgui)' \
     '    rm -rf "$package_dir" "$jar_dir"' \

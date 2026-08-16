@@ -23,7 +23,7 @@ unzip -qq "$artifact" -d "$temp_dir/plugin"
 
 plugin_jars=()
 while IFS= read -r candidate; do
-  if unzip -Z1 "$candidate" | grep -Fxq 'META-INF/plugin.xml'; then
+  if unzip -p "$candidate" META-INF/plugin.xml >/dev/null 2>&1; then
     plugin_jars+=("$candidate")
   fi
 done < <(find "$temp_dir/plugin" -type f -name '*.jar')
