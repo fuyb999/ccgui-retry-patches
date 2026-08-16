@@ -819,10 +819,10 @@ index 00000000..6ca64ed4
 +  assert.equal(attempts, 1);
 +});
 diff --git a/ai-bridge/services/codex/message-service.js b/ai-bridge/services/codex/message-service.js
-index 9d2967b7..6209305b 100644
+index 9d2967b7..874ed2a5 100644
 --- a/ai-bridge/services/codex/message-service.js
 +++ b/ai-bridge/services/codex/message-service.js
-@@ -34,6 +34,95 @@ import {
+@@ -34,6 +34,133 @@ import {
    prepareSessionReplayBoundary,
    processCodexEventStream,
  } from './codex-event-handler.js';
@@ -832,15 +832,53 @@ index 9d2967b7..6209305b 100644
 +  withCodexInactivityTimeout,
 +} from './codex-retry.js';
 +
++export const CODEX_SESSION_POLL_INTERVAL_MS = 3_000;
++
++function createSessionPollWait(ms, timers = globalThis) {
++  let timer = null;
++  const promise = new Promise((resolve) => {
++    timer = timers.setTimeout(() => {
++      timer = null;
++      resolve({ kind: 'poll' });
++    }, ms);
++  });
++  return {
++    promise,
++    cancel() {
++      if (timer !== null) timers.clearTimeout(timer);
++      timer = null;
++    },
++  };
++}
++
 +function withCodexEventInactivityWatchdog(events, options) {
 +  if (!events || typeof events[Symbol.asyncIterator] !== 'function') return events;
 +
 +  return {
 +    async *[Symbol.asyncIterator]() {
 +      const iterator = events[Symbol.asyncIterator]();
++      const pollIntervalMs = options?.pollIntervalMs ?? CODEX_SESSION_POLL_INTERVAL_MS;
++      const pollTimers = options?.timers ?? globalThis;
++      let pendingNext = null;
 +      try {
 +        while (true) {
-+          const result = await withCodexInactivityTimeout(iterator.next(), options);
++          if (!pendingNext) {
++            pendingNext = withCodexInactivityTimeout(iterator.next(), options)
++              .then((result) => ({ kind: 'event', result }));
++          }
++          const pollWait = createSessionPollWait(pollIntervalMs, pollTimers);
++          let outcome;
++          try {
++            outcome = await Promise.race([pendingNext, pollWait.promise]);
++          } finally {
++            pollWait.cancel();
++          }
++          if (outcome.kind === 'poll') {
++            yield { type: 'session.poll' };
++            continue;
++          }
++          pendingNext = null;
++          const { result } = outcome;
 +          if (result.done) return;
 +          yield result.value;
 +        }
@@ -918,7 +956,7 @@ index 9d2967b7..6209305b 100644
  
  // ---------------------------------------------------------------------------
  // sendMessage
-@@ -260,13 +349,6 @@ export async function sendMessage(
+@@ -260,13 +387,6 @@ export async function sendMessage(
      const state = createInitialEventState(emitMessage);
      await prepareSessionReplayBoundary(state, threadId);
  
@@ -932,7 +970,7 @@ index 9d2967b7..6209305b 100644
      // ============================================================
      // 7. Delegate Event Processing to codex-event-handler
      // ============================================================
-@@ -276,12 +358,21 @@ export async function sendMessage(
+@@ -276,12 +396,21 @@ export async function sendMessage(
        threadId,
        threadOptions,
        normalizedPermissionMode,
@@ -960,10 +998,10 @@ index 9d2967b7..6209305b 100644
      // ============================================================
 diff --git a/ai-bridge/services/codex/message-service.retry.test.js b/ai-bridge/services/codex/message-service.retry.test.js
 new file mode 100644
-index 00000000..bae30ec6
+index 00000000..c1fc49aa
 --- /dev/null
 +++ b/ai-bridge/services/codex/message-service.retry.test.js
-@@ -0,0 +1,308 @@
+@@ -0,0 +1,406 @@
 +import test from 'node:test';
 +import assert from 'node:assert/strict';
 +import { readFileSync } from 'node:fs';
@@ -1206,7 +1244,7 @@ index 00000000..bae30ec6
 +    setTimeout(callback, delay) {
 +      const id = nextTimerId++;
 +      timerDelays.push(delay);
-+      pendingTimers.set(id, callback);
++      pendingTimers.set(id, { callback, delay });
 +      return id;
 +    },
 +    clearTimeout(id) {
@@ -1259,8 +1297,11 @@ index 00000000..bae30ec6
 +
 +  await new Promise(setImmediate);
 +  assert.equal(runCalls, 1);
-+  assert.equal(pendingTimers.size, 1);
-+  pendingTimers.values().next().value();
++  const inactivityTimer = [...pendingTimers.entries()]
++    .find(([, timer]) => timer.delay === 5_000);
++  assert.ok(inactivityTimer, 'the inactivity deadline must remain armed alongside polling');
++  pendingTimers.delete(inactivityTimer[0]);
++  inactivityTimer[1].callback();
 +  await running;
 +
 +  assert.equal(firstAttemptSignal.aborted, true);
@@ -1269,8 +1310,103 @@ index 00000000..bae30ec6
 +  assert.deepEqual(delays, [30_000]);
 +  assert.equal(retryNotices.length, 1);
 +  assert.ok(timerDelays.length >= 4);
-+  assert.deepEqual(new Set(timerDelays), new Set([5_000]));
++  assert.deepEqual(new Set(timerDelays), new Set([3_000, 5_000]));
 +  assert.equal(pendingTimers.size, 0);
++});
++
++test('polls a silent SDK stream every three seconds without resetting inactivity', async () => {
++  const operationController = new AbortController();
++  const pendingTimers = new Map();
++  const processedTypes = [];
++  const retryNotices = [];
++  let nextTimerId = 1;
++  let runCalls = 0;
++
++  const timers = {
++    setTimeout(callback, delay) {
++      const id = nextTimerId++;
++      pendingTimers.set(id, { callback, delay });
++      return id;
++    },
++    clearTimeout(id) {
++      pendingTimers.delete(id);
++    },
++  };
++  const findTimer = (delay) => {
++    for (const [id, timer] of pendingTimers) {
++      if (timer.delay === delay) return { id, ...timer };
++    }
++    return null;
++  };
++  const fireTimer = (timer) => {
++    assert.ok(timer, 'expected timer to exist');
++    pendingTimers.delete(timer.id);
++    timer.callback();
++  };
++  const flushAsyncWork = async () => {
++    await new Promise(setImmediate);
++    await new Promise(setImmediate);
++  };
++
++  const thread = {
++    async runStreamed(_input, options) {
++      runCalls += 1;
++      if (runCalls > 1) return { events: [] };
++      return {
++        events: {
++          [Symbol.asyncIterator]() {
++            return {
++              next: () => new Promise((resolve, reject) => {
++                options.signal.addEventListener('abort', () => reject(options.signal.reason), { once: true });
++              }),
++              return: async () => ({ done: true }),
++            };
++          },
++        },
++      };
++    },
++  };
++
++  const running = runCodexMessageAttempts({
++    thread,
++    runInput: 'poll silent stream',
++    state: {},
++    config: {},
++    signal: operationController.signal,
++    processEvents: async (events) => {
++      for await (const event of events) processedTypes.push(event.type);
++    },
++    inactivityTimeoutMs: 5_000,
++    inactivityTimers: timers,
++    sleep: async () => {},
++    onRetry: (notice) => retryNotices.push(notice),
++  });
++
++  try {
++    await flushAsyncWork();
++    const inactivityTimer = findTimer(5_000);
++    assert.ok(inactivityTimer, 'the original inactivity deadline must be armed');
++
++    fireTimer(findTimer(3_000));
++    await flushAsyncWork();
++    assert.deepEqual(processedTypes, ['session.poll']);
++    assert.equal(findTimer(5_000)?.id, inactivityTimer.id);
++
++    fireTimer(findTimer(3_000));
++    await flushAsyncWork();
++    assert.deepEqual(processedTypes, ['session.poll', 'session.poll']);
++    assert.equal(findTimer(5_000)?.id, inactivityTimer.id);
++
++    fireTimer(inactivityTimer);
++    await running;
++  } finally {
++    operationController.abort();
++    await running.catch(() => {});
++  }
++
++  assert.equal(runCalls, 2);
++  assert.equal(retryNotices.length, 1);
++  assert.equal(retryNotices[0].reason.category, 'inactivity');
 +});
 diff --git a/build.gradle b/build.gradle
 index 264cbfc4..3e7e6917 100644
