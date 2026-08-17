@@ -7,7 +7,7 @@
     "commit": "077cccff6707c11796fb0fbd3445b66abd97f83e"
   },
   "pluginVersion": "0.5.2",
-  "patchedPluginVersion": "0.5.2-retry.3",
+  "patchedPluginVersion": "0.5.2-retry.4",
   "bridgeVersion": "1.0.0",
   "sourceHashes": {
     "build.gradle": "1ac8665aa2757cf76a041285c77f8dc13caef5a6f34ac184a81502e19f01af0d",
@@ -19,11 +19,13 @@
     "src/main/java/com/github/claudecodegui/session/ClaudeSession.java": "06c9f39b5df86c3a7b03aa543e57107b86f0eefe88a0f869d2d87efd5e9861d8",
     "src/main/java/com/github/claudecodegui/session/CodexMessageHandler.java": "731489298597ce92477336c10bc8b02aa6c5566b413d308ce7fed415327fe1d7",
     "src/main/java/com/github/claudecodegui/session/SessionCallbackAdapter.java": "6f4187dd6b16908c03140becf38616e7bcf73c1452619a35fbfd679909e0f4a9",
+    "src/main/java/com/github/claudecodegui/session/StreamMessageCoalescer.java": "7fd64ecbb1b486f3169fc95d129477a03d532ecf12bcfe86dbde325c0fa977f8",
     "src/main/java/com/github/claudecodegui/ui/ChatWindowDelegate.java": "cc9e2a3fe1369cb6ad89aaa68cf0e14fe12d77b00001d7f56d29487ee9192076",
     "src/main/java/com/github/claudecodegui/ui/toolwindow/ClaudeChatWindow.java": "53c1900d633806d1cb30c53d7e7c9bff160c0750e08711e2bfc5536f1b1fe2f3",
     "src/test/java/com/github/claudecodegui/provider/codex/CodexSDKBridgeProtocolTest.java": "310c5017ad9891a059d4dfb953a06dcac1b3830ed67fe4cf51c771e35d4abac0",
     "src/test/java/com/github/claudecodegui/session/CodexMessageHandlerTest.java": "30bd97fcdae4439aea691f4af864100d1724e85c5b2fd3009e7ebd614324c80b",
     "src/test/java/com/github/claudecodegui/session/SessionCallbackAdapterUsageTest.java": "5884b23876ed095ea5a9d7f049373194eb26d5de009f4dbc3ec28a5f42d618cb",
+    "src/test/java/com/github/claudecodegui/session/StreamMessageCoalescerStreamEndHookTest.java": "c405ede97f403d40ef1499546b40389f3a4f4e9c640fb78228304a15b3a46632",
     "src/test/java/com/github/claudecodegui/ui/ChatWindowDelegateTest.java": "99ec5269f475bf3de433dccfc8e11756833c87517bd881007e35f1acacf2ab46",
     "webview/src/App.tsx": "bebb45224b046f8079a1768fedcc26d83fc4360089fc7ff4fefbe502f2219e9c",
     "webview/src/components/ChatScreen.tsx": "40305446dac2c8b9200d9e81bba3d911e6fe3e07dc360a6fb3151f51ed551f2b",
@@ -58,5 +60,5 @@
     "ai-bridge/services/codex/message-service.retry.test.js",
     "ai-bridge/services/codex/codex-event-handler.test.js"
   ],
-  "artifact": "ccgui-0.5.2-retry.3.zip"
+  "artifact": "ccgui-0.5.2-retry.4.zip"
 }

@@ -38,7 +38,11 @@ fi
 
 webview_html="$(unzip -p "$plugin_jar" html/claude-chat.html)" || \
   die "Embedded WebView missing: html/claude-chat.html"
-for marker in onCodexRetryState codex-retry-status; do
+webview_markers=(onCodexRetryState codex-retry-status)
+if [[ "$VERSION" == 'v0.5.2' ]]; then
+  webview_markers+=(message-tail-assistant-anchor-v1)
+fi
+for marker in "${webview_markers[@]}"; do
   if ! grep -Fq "$marker" <<< "$webview_html"; then
     die "Embedded WebView retry marker missing: $marker"
   fi

@@ -1804,7 +1804,7 @@ index 00000000..c1fc49aa
 +  assert.equal(retryNotices[0].reason.category, 'inactivity');
 +});
 diff --git a/build.gradle b/build.gradle
-index 264cbfc4..86799a8c 100644
+index 264cbfc4..80651648 100644
 --- a/build.gradle
 +++ b/build.gradle
 @@ -42,7 +42,7 @@ tasks.named('checkstyleTest') {
@@ -1812,7 +1812,7 @@ index 264cbfc4..86799a8c 100644
  
  group = 'com.github.idea-claude-code-gui'
 -version = '0.5.2'
-+version = '0.5.2-retry.3'
++version = '0.5.2-retry.4'
  
  java {
      sourceCompatibility = JavaVersion.VERSION_17
@@ -3447,7 +3447,7 @@ index 926677cf..7fdf7a00 100644
      setStreamingActive: options.setStreamingActive,
      isStreamingRef: options.isStreamingRef,
 diff --git a/webview/src/hooks/windowCallbacks/registerCallbacks/messageCallbacks.ts b/webview/src/hooks/windowCallbacks/registerCallbacks/messageCallbacks.ts
-index c7561d08..16a7308f 100644
+index c7561d08..d6c0d730 100644
 --- a/webview/src/hooks/windowCallbacks/registerCallbacks/messageCallbacks.ts
 +++ b/webview/src/hooks/windowCallbacks/registerCallbacks/messageCallbacks.ts
 @@ -9,6 +9,7 @@
@@ -3585,7 +3585,7 @@ index c7561d08..16a7308f 100644
    ) => {
      if (window.__sessionTransitioning) return;
      const sequence = parseSequence(sequenceArg);
-@@ -459,23 +559,64 @@ export function registerMessageCallbacks(
+@@ -459,23 +559,65 @@ export function registerMessageCallbacks(
      try {
        const tail = JSON.parse(json) as ClaudeMessage[];
        if (!Array.isArray(tail)) return;
@@ -3609,7 +3609,8 @@ index c7561d08..16a7308f 100644
 +          ) {
 +            anchorMessage = parsedAnchor[0] as ClaudeMessage;
 +          }
-+        } catch {
++        } catch (error) {
++          console.error('[Frontend] Failed to parse message-tail-assistant-anchor-v1:', error);
 +          anchorMessage = null;
 +        }
 +      }
@@ -3654,7 +3655,7 @@ index c7561d08..16a7308f 100644
            : [...prependedHistory, ...tail];
          window.__messageBaseIndex = hasFullPrefix ? 0 : baseIndex;
  
-@@ -598,6 +739,13 @@ export function registerMessageCallbacks(
+@@ -598,6 +740,13 @@ export function registerMessageCallbacks(
      addToast(text);
    };
  
@@ -3668,7 +3669,7 @@ index c7561d08..16a7308f 100644
    window.showLoading = (value) => {
      const isLoading = isTruthy(value);
  
-@@ -606,6 +754,10 @@ export function registerMessageCallbacks(
+@@ -606,6 +755,10 @@ export function registerMessageCallbacks(
        return;
      }
  
@@ -3679,7 +3680,7 @@ index c7561d08..16a7308f 100644
      // Notify backend about loading state change for tab indicator
      sendBridgeEvent('tab_loading_changed', JSON.stringify({ loading: isLoading }));
  
-@@ -747,6 +899,7 @@ export function registerMessageCallbacks(
+@@ -747,6 +900,7 @@ export function registerMessageCallbacks(
      window.__pendingHistoryRefreshMessageCount = undefined;
      window.__historySurfaceRefreshEpoch = (window.__historySurfaceRefreshEpoch ?? 0) + 1;
      resetTransientUiState();
