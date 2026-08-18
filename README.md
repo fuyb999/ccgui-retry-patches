@@ -8,7 +8,7 @@ hash set, and ordered Git patch list. Patches are never applied across versions.
 
 | CC GUI | Upstream commit | Patch artifact |
 | --- | --- | --- |
-| `v0.5.2` | `077cccff6707c11796fb0fbd3445b66abd97f83e` | `dist/ccgui-0.5.2-retry.4.zip` |
+| `v0.5.2` | `077cccff6707c11796fb0fbd3445b66abd97f83e` | `dist/ccgui-0.5.2-retry.5.zip` |
 | `v0.5` | `76247b2001c17ff4de28b98458b5e7ed0860962e` | `dist/ccgui-0.5-retry.4.zip` |
 
 ## Retry Policy
@@ -55,11 +55,14 @@ The two lifecycle payloads are:
 `retryCount: 0` is the initial SDK attempt. Positive values identify retries.
 The `v0.5.2` build also retains the upstream streaming coalescer fix that sends
 the current message frame even when a newer frame has already been queued, so
-tool and result blocks are not held until stream completion. For conversations
-longer than 300 messages, its bounded 180-message tail now carries the omitted
-current assistant as a sparse indexed anchor. This keeps new thinking and tool
-blocks visible even after more than 180 tool results have accumulated, without
-resending the unchanged conversation prefix.
+tool and result blocks are not held until stream completion. Automatic Codex
+restore and background reconciliation stream the session JSONL into a bounded
+window containing the latest 180 converted messages plus an omitted current
+assistant anchor. Explicit export and paginated history browsing remain
+unchanged. For conversations longer than 300 messages, the first and later
+WebView updates use the same bounded tail and sparse indexed anchor. This keeps
+new thinking and tool blocks visible after more than 180 tool results have
+accumulated without replaying the full session through JCEF.
 
 Malformed payloads and unknown reason categories are ignored. Terminal 400, 401,
 403, and daily-limit 429 errors clear retry progress and follow the existing
@@ -143,10 +146,10 @@ rtk scripts/verify.sh v0.5.2
 1. Open IDEA settings.
 2. Go to **Plugins**.
 3. Open the gear menu and choose **Install Plugin from Disk**.
-4. Select `dist/ccgui-0.5.2-retry.4.zip`.
+4. Select `dist/ccgui-0.5.2-retry.5.zip`.
 5. Restart the IDE when prompted.
 
-IDEA reports this patched build as plugin version `0.5.2-retry.4`. The scripts
+IDEA reports this patched build as plugin version `0.5.2-retry.5`. The scripts
 never overwrite the currently installed plugin.
 
 ## Add A Version

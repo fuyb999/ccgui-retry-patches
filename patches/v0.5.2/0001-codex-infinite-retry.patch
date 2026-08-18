@@ -1804,7 +1804,7 @@ index 00000000..c1fc49aa
 +  assert.equal(retryNotices[0].reason.category, 'inactivity');
 +});
 diff --git a/build.gradle b/build.gradle
-index 264cbfc4..80651648 100644
+index 264cbfc4..dfde6e3a 100644
 --- a/build.gradle
 +++ b/build.gradle
 @@ -42,7 +42,7 @@ tasks.named('checkstyleTest') {
@@ -1812,15 +1812,93 @@ index 264cbfc4..80651648 100644
  
  group = 'com.github.idea-claude-code-gui'
 -version = '0.5.2'
-+version = '0.5.2-retry.4'
++version = '0.5.2-retry.5'
  
  java {
      sourceCompatibility = JavaVersion.VERSION_17
+diff --git a/src/main/java/com/github/claudecodegui/handler/history/HistoryMessageInjector.java b/src/main/java/com/github/claudecodegui/handler/history/HistoryMessageInjector.java
+index fee7101e..201b538a 100644
+--- a/src/main/java/com/github/claudecodegui/handler/history/HistoryMessageInjector.java
++++ b/src/main/java/com/github/claudecodegui/handler/history/HistoryMessageInjector.java
+@@ -472,6 +472,65 @@ public class HistoryMessageInjector {
+         return frontendMessages;
+     }
+ 
++    /**
++     * Reads only a bounded frontend history window from a Codex JSONL session.
++     * The full history path above remains available for explicit history export;
++     * automatic session restore must not materialize a long-running session in memory.
++     */
++    public static List<JsonObject> readRecentCodexFrontendMessages(
++            CodexHistoryReader reader,
++            String sessionId,
++            int tailSize
++    ) throws IOException {
++        if (reader == null) {
++            throw new IllegalArgumentException("Codex history reader must not be null");
++        }
++        if (tailSize <= 0) {
++            throw new IllegalArgumentException("Codex history tail size must be positive");
++        }
++
++        Deque<JsonObject> recentMessages = new ArrayDeque<>(tailSize);
++        JsonObject[] latestAssistant = new JsonObject[1];
++        int[] emittedMessageCount = new int[1];
++        CodexFrontendMessageAccumulator accumulator = new CodexFrontendMessageAccumulator(message -> {
++            if (message == null) {
++                return;
++            }
++            emittedMessageCount[0]++;
++            if ("assistant".equals(getStringProperty(message, "type"))) {
++                latestAssistant[0] = message;
++            }
++            recentMessages.addLast(message);
++            while (recentMessages.size() > tailSize) {
++                recentMessages.removeFirst();
++            }
++        });
++
++        int rawRecordCount = reader.forEachSessionMessage(sessionId, accumulator::accept);
++        accumulator.finish();
++
++        List<JsonObject> boundedMessages = new ArrayList<>(recentMessages.size() + 1);
++        JsonObject anchor = latestAssistant[0];
++        boolean anchorInTail = false;
++        for (JsonObject message : recentMessages) {
++            if (message == anchor) {
++                anchorInTail = true;
++                break;
++            }
++        }
++        if (anchor != null && !anchorInTail) {
++            boundedMessages.add(anchor);
++        }
++        boundedMessages.addAll(recentMessages);
++
++        LOG.info("[HistoryHandler] codex-bounded-history-window-v1 session=" + sessionId
++                + ", rawRecords=" + rawRecordCount
++                + ", emittedMessages=" + emittedMessageCount[0]
++                + ", tailMessages=" + recentMessages.size()
++                + ", anchorInserted=" + (anchor != null && !anchorInTail));
++        return boundedMessages;
++    }
++
+     /**
+      * Extracts a provider-reported Codex context snapshot from a JSONL token_count record.
+      * Only last_token_usage represents the active model context. Session-cumulative
 diff --git a/src/main/java/com/github/claudecodegui/provider/codex/CodexSDKBridge.java b/src/main/java/com/github/claudecodegui/provider/codex/CodexSDKBridge.java
-index 87afb53d..4866efba 100644
+index 87afb53d..34d51689 100644
 --- a/src/main/java/com/github/claudecodegui/provider/codex/CodexSDKBridge.java
 +++ b/src/main/java/com/github/claudecodegui/provider/codex/CodexSDKBridge.java
-@@ -192,6 +192,8 @@ public class CodexSDKBridge extends BaseSDKBridge {
+@@ -38,6 +38,7 @@ import java.util.concurrent.atomic.AtomicReference;
+ public class CodexSDKBridge extends BaseSDKBridge {
+ 
+     // Codex API configuration
++    private static final int CODEX_AUTO_REPLAY_TAIL_SIZE = 180;
+     private String baseUrl = null;
+     private String apiKey = null;
+     private static final String SANDBOX_MODE_WORKSPACE_WRITE = "workspace-write";
+@@ -192,6 +193,8 @@ public class CodexSDKBridge extends BaseSDKBridge {
              callback.onMessage("stream_end", "");
          } else if (line.startsWith("[MESSAGE_END]")) {
              callback.onMessage("message_end", "");
@@ -1829,6 +1907,21 @@ index 87afb53d..4866efba 100644
          } else if (line.startsWith("[THREAD_ID]")) {
              String receivedThreadId = line.substring("[THREAD_ID]".length()).trim();
              callback.onMessage("session_id", receivedThreadId);
+@@ -613,12 +616,8 @@ public class CodexSDKBridge extends BaseSDKBridge {
+      */
+     public List<JsonObject> getSessionMessages(String sessionId, String cwd) {
+         try {
+-            String rawMessages = historyReader.getSessionMessagesAsJson(sessionId);
+-            JsonArray historyItems = gson.fromJson(rawMessages, JsonArray.class);
+-            if (historyItems == null) {
+-                return List.of();
+-            }
+-            return HistoryMessageInjector.convertCodexMessagesToFrontendBatch(historyItems);
++            return HistoryMessageInjector.readRecentCodexFrontendMessages(
++                    historyReader, sessionId, CODEX_AUTO_REPLAY_TAIL_SIZE);
+         } catch (Exception e) {
+             LOG.warn("Failed to load Codex session history: " + e.getMessage(), e);
+             return List.of();
 diff --git a/src/main/java/com/github/claudecodegui/session/CallbackHandler.java b/src/main/java/com/github/claudecodegui/session/CallbackHandler.java
 index 28c819dd..432843c4 100644
 --- a/src/main/java/com/github/claudecodegui/session/CallbackHandler.java
@@ -2217,7 +2310,7 @@ index 3af159f3..4fabea6f 100644
      }
  
 diff --git a/src/main/java/com/github/claudecodegui/session/StreamMessageCoalescer.java b/src/main/java/com/github/claudecodegui/session/StreamMessageCoalescer.java
-index 37059022..30daf076 100644
+index 37059022..5d330f08 100644
 --- a/src/main/java/com/github/claudecodegui/session/StreamMessageCoalescer.java
 +++ b/src/main/java/com/github/claudecodegui/session/StreamMessageCoalescer.java
 @@ -100,7 +100,9 @@ public class StreamMessageCoalescer {
@@ -2286,7 +2379,13 @@ index 37059022..30daf076 100644
                      } else {
                          callbackTarget.callJavaScript("updateMessages", escapedMessagesJson, String.valueOf(pushSequence));
                      }
-@@ -459,7 +479,26 @@ public class StreamMessageCoalescer {
+@@ -455,11 +475,31 @@ public class StreamMessageCoalescer {
+         boolean stablePrefix = previousMessages != null
+                 && (messages.size() >= previousMessages.size()
+                 && hasSamePrefix(previousMessages, messages, candidateBaseIndex));
+-        boolean tailUpdate = longConversation && stablePrefix;
++        boolean tailUpdate = longConversation
++                && (previousMessages == null || stablePrefix);
          int baseIndex = tailUpdate ? candidateBaseIndex : 0;
          List<ClaudeSession.Message> transportMessages = tailUpdate
                  ? List.copyOf(messages.subList(baseIndex, messages.size())) : messages;
@@ -2356,6 +2455,55 @@ index a7447259..1c474ad3 100644
              @Override
              public void setFrontendReady(boolean ready) {
                  updateFrontendReadyState(ready);
+diff --git a/src/test/java/com/github/claudecodegui/provider/codex/CodexSDKBridgeHistoryTest.java b/src/test/java/com/github/claudecodegui/provider/codex/CodexSDKBridgeHistoryTest.java
+index 4149893b..43d06005 100644
+--- a/src/test/java/com/github/claudecodegui/provider/codex/CodexSDKBridgeHistoryTest.java
++++ b/src/test/java/com/github/claudecodegui/provider/codex/CodexSDKBridgeHistoryTest.java
+@@ -47,6 +47,44 @@ public class CodexSDKBridgeHistoryTest {
+         }
+     }
+ 
++    @Test
++    public void getSessionMessagesBoundsLargeHistoryAndKeepsLatestAssistantAnchor() throws IOException {
++        Path sessionsDir = Files.createTempDirectory("codex-sdk-bridge-history-bounded");
++        try {
++            String[] records = new String[222];
++            records[0] = line("2026-03-10T10:00:00Z", "response_item",
++                    "{\"type\":\"message\",\"role\":\"assistant\",\"content\":[{\"type\":\"output_text\",\"text\":\"Latest assistant anchor\"}]}" );
++            records[1] = line("2026-03-10T10:00:01Z", "event_msg",
++                    "{\"type\":\"token_count\",\"info\":{\"last_token_usage\":{\"input_tokens\":321,\"output_tokens\":12,\"cached_input_tokens\":0},\"model_context_window\":4096}}" );
++            for (int i = 0; i < 220; i++) {
++                records[i + 2] = line("2026-03-10T10:" + String.format("%02d", (i + 2) % 60) + ":00", "response_item",
++                        "{\"type\":\"function_call_output\",\"call_id\":\"call-" + i
++                                + "\",\"output\":\"result-" + i + "\"}");
++            }
++            writeSessionFile(sessionsDir, "session-bounded-history", records);
++
++            CodexSDKBridge bridge = new CodexSDKBridge(sessionsDir);
++            List<JsonObject> messages = bridge.getSessionMessages(
++                    "session-bounded-history", sessionsDir.toString());
++
++            assertEquals(181, messages.size());
++            assertEquals("assistant", messages.get(0).get("type").getAsString());
++            assertEquals("Latest assistant anchor", messages.get(0).get("content").getAsString());
++            assertEquals(321, messages.get(0).getAsJsonObject("raw")
++                    .getAsJsonObject("usage").get("input_tokens").getAsInt());
++            for (int i = 0; i < 180; i++) {
++                JsonObject result = messages.get(i + 1);
++                assertEquals("user", result.get("type").getAsString());
++                assertEquals("[tool_result]", result.get("content").getAsString());
++                assertEquals("result-" + (i + 40), result.getAsJsonObject("raw")
++                        .getAsJsonArray("content").get(0).getAsJsonObject()
++                        .get("content").getAsString());
++            }
++        } finally {
++            deleteDirectory(sessionsDir);
++        }
++    }
++
+     @Test
+     public void getSessionMessagesPreservesToolResultForAutoRestore() throws IOException {
+         Path sessionsDir = Files.createTempDirectory("codex-sdk-bridge-history-tool-result");
 diff --git a/src/test/java/com/github/claudecodegui/provider/codex/CodexSDKBridgeProtocolTest.java b/src/test/java/com/github/claudecodegui/provider/codex/CodexSDKBridgeProtocolTest.java
 index 9509cd8d..a264cc63 100644
 --- a/src/test/java/com/github/claudecodegui/provider/codex/CodexSDKBridgeProtocolTest.java
@@ -2566,7 +2714,7 @@ index 1304649e..7392b1aa 100644
      public void normalizeUsageValueRejectsNegativeValues() {
          assertEquals(0, SessionCallbackAdapter.normalizeUsageValue(-1));
 diff --git a/src/test/java/com/github/claudecodegui/session/StreamMessageCoalescerStreamEndHookTest.java b/src/test/java/com/github/claudecodegui/session/StreamMessageCoalescerStreamEndHookTest.java
-index 11263499..0f1ff834 100644
+index 11263499..b418b902 100644
 --- a/src/test/java/com/github/claudecodegui/session/StreamMessageCoalescerStreamEndHookTest.java
 +++ b/src/test/java/com/github/claudecodegui/session/StreamMessageCoalescerStreamEndHookTest.java
 @@ -10,6 +10,7 @@ import java.util.concurrent.atomic.AtomicInteger;
@@ -2577,7 +2725,42 @@ index 11263499..0f1ff834 100644
  import static org.junit.Assert.assertTrue;
  
  /**
-@@ -155,6 +156,46 @@ public class StreamMessageCoalescerStreamEndHookTest {
+@@ -89,15 +90,30 @@ public class StreamMessageCoalescerStreamEndHookTest {
+     }
+ 
+     @Test
+-    public void firstLongConversationSnapshotKeepsTheFullPrefix() {
++    public void firstLongConversationSnapshotUsesBoundedTail() {
+         List<ClaudeSession.Message> messages = messages(400);
+ 
+         StreamMessageCoalescer.MessageTransport transport =
+                 StreamMessageCoalescer.selectMessageTransport(messages, null);
+ 
+-        assertFalse(transport.tailUpdate());
+-        assertEquals(0, transport.baseIndex());
+-        assertEquals(messages, transport.messages());
++        assertTrue(transport.tailUpdate());
++        assertEquals(220, transport.baseIndex());
++        assertEquals(180, transport.messages().size());
++    }
++
++    @Test
++    public void firstLongConversationCarriesOmittedAssistantAnchor() {
++        List<ClaudeSession.Message> messages = messages(400);
++        ClaudeSession.Message assistant = new ClaudeSession.Message(
++                ClaudeSession.Message.Type.ASSISTANT, "current answer");
++        messages.set(100, assistant);
++
++        StreamMessageCoalescer.MessageTransport transport =
++                StreamMessageCoalescer.selectMessageTransport(messages, null);
++
++        assertTrue(transport.tailUpdate());
++        assertEquals(100, transport.anchorIndex());
++        assertEquals(assistant, transport.anchorMessage());
+     }
+ 
+     @Test
+@@ -155,6 +171,46 @@ public class StreamMessageCoalescerStreamEndHookTest {
          assertEquals(rebuilt, transport.messages());
      }
  
@@ -3141,7 +3324,7 @@ index e71c53d6..3003f8c5 100644
  
    return <MessagesContext.Provider value={value}>{children}</MessagesContext.Provider>;
 diff --git a/webview/src/global.d.ts b/webview/src/global.d.ts
-index e626fb1e..31c765eb 100644
+index e626fb1e..847135d7 100644
 --- a/webview/src/global.d.ts
 +++ b/webview/src/global.d.ts
 @@ -36,6 +36,8 @@ interface Window {
@@ -3162,8 +3345,17 @@ index e626fb1e..31c765eb 100644
    /**
     * Show thinking status
     */
+@@ -883,6 +887,8 @@ interface Window {
+   __prependedHistoryMessageCount?: number;
+   /** Backend index represented by the first non-prepended message; zero means its full prefix is present. */
+   __messageBaseIndex?: number;
++  /** Backend index of the assistant rendered ahead of a tail-only message window. */
++  __messageSparseAssistantAnchorIndex?: number;
+   /** Cancel pending rAF-deferred updateMessages (set by messageCallbacks, called by onStreamEnd). */
+   __cancelPendingUpdateMessages?: () => void;
+ 
 diff --git a/webview/src/hooks/useWindowCallbacks.test.ts b/webview/src/hooks/useWindowCallbacks.test.ts
-index 4ff94336..88041869 100644
+index 4ff94336..9db7d026 100644
 --- a/webview/src/hooks/useWindowCallbacks.test.ts
 +++ b/webview/src/hooks/useWindowCallbacks.test.ts
 @@ -30,6 +30,7 @@ describe('useWindowCallbacks integration', () => {
@@ -3174,7 +3366,33 @@ index 4ff94336..88041869 100644
      setIsThinking: vi.fn(),
      setExpandedThinking: vi.fn(),
      setStreamingActive: vi.fn(),
-@@ -819,6 +820,103 @@ describe('useWindowCallbacks integration', () => {
+@@ -116,6 +117,7 @@ describe('useWindowCallbacks integration', () => {
+     window.__minAcceptedUpdateSequence = 0;
+     window.__prependedHistoryMessageCount = 0;
+     window.__messageBaseIndex = 0;
++    window.__messageSparseAssistantAnchorIndex = undefined;
+     window.__pendingSessionTransitionToast = undefined;
+     window.__deniedToolIds = new Set();
+     window.sendToJava = vi.fn();
+@@ -698,6 +700,8 @@ describe('useWindowCallbacks integration', () => {
+     ]);
+     opts.currentSessionIdRef.current = 'session-1';
+     window.__prependedHistoryMessageCount = 1;
++    window.__messageBaseIndex = 220;
++    window.__messageSparseAssistantAnchorIndex = 100;
+     renderHook(() => useWindowCallbacks(opts));
+ 
+     act(() => {
+@@ -715,6 +719,8 @@ describe('useWindowCallbacks integration', () => {
+ 
+     expect(buffer.current.map(message => message.content)).toEqual(['replacement']);
+     expect(window.__prependedHistoryMessageCount).toBe(0);
++    expect(window.__messageBaseIndex).toBe(0);
++    expect(window.__messageSparseAssistantAnchorIndex).toBeUndefined();
+   });
+ 
+   it('keeps the streaming assistant index aligned when history is prepended', () => {
+@@ -819,6 +825,103 @@ describe('useWindowCallbacks integration', () => {
      expect(window.__minAcceptedUpdateSequence).toBe(7);
    });
  
@@ -3278,10 +3496,93 @@ index 4ff94336..88041869 100644
    it('keeps prepended history aligned when patching the backend tail', () => {
      const initial = Array.from({ length: 400 }, (_, index): ClaudeMessage => ({
        type: index % 2 === 0 ? 'user' : 'assistant',
-@@ -1198,6 +1296,135 @@ describe('useWindowCallbacks integration', () => {
-     expect(window.__prependedHistoryMessageCount).toBe(0);
+@@ -959,6 +1062,43 @@ describe('useWindowCallbacks integration', () => {
+     expect(window.__messageBaseIndex).toBe(170);
    });
  
++  it('renders, replaces, and removes a sparse anchor without a full prefix', () => {
++    const { opts, buffer } = createOptsWithMessages([]);
++    renderHook(() => useWindowCallbacks(opts));
++
++    act(() => window.updateMessageTail!(
++      JSON.stringify([{ type: 'user', content: 'tool-result-220' }]),
++      220,
++      7,
++      JSON.stringify([{ type: 'assistant', content: 'anchor-v1' }]),
++      100,
++    ));
++    expect(buffer.current.map((message) => message.content)).toEqual([
++      'anchor-v1', 'tool-result-220',
++    ]);
++    expect(window.__messageSparseAssistantAnchorIndex).toBe(100);
++
++    act(() => window.updateMessageTail!(
++      JSON.stringify([{ type: 'user', content: 'tool-result-221' }]),
++      221,
++      8,
++      JSON.stringify([{ type: 'assistant', content: 'anchor-v2' }]),
++      100,
++    ));
++    expect(buffer.current.map((message) => message.content)).toEqual([
++      'anchor-v2', 'tool-result-221',
++    ]);
++
++    act(() => window.updateMessageTail!(JSON.stringify([
++      { type: 'assistant', content: 'assistant-in-tail' },
++      { type: 'user', content: 'tool-result-222' },
++    ]), 222, 9));
++    expect(buffer.current.map((message) => message.content)).toEqual([
++      'assistant-in-tail', 'tool-result-222',
++    ]);
++    expect(window.__messageSparseAssistantAnchorIndex).toBeUndefined();
++  });
++
+   it('ignores stale or invalid long-conversation tail updates', () => {
+     const { opts, buffer } = createOptsWithMessages([
+       { type: 'user', content: 'current' },
+@@ -981,9 +1121,14 @@ describe('useWindowCallbacks integration', () => {
+   it('resets the tail base when a full snapshot arrives', () => {
+     const { opts, buffer } = createOptsWithMessages([]);
+     renderHook(() => useWindowCallbacks(opts));
+-    act(() => window.updateMessageTail!(JSON.stringify([
+-      { type: 'assistant', content: 'tail-only' },
+-    ]), 220, 7));
++    act(() => window.updateMessageTail!(
++      JSON.stringify([{ type: 'user', content: 'tail-only' }]),
++      220,
++      7,
++      JSON.stringify([{ type: 'assistant', content: 'sparse-anchor' }]),
++      100,
++    ));
++    expect(window.__messageSparseAssistantAnchorIndex).toBe(100);
+ 
+     act(() => window.updateMessages!(JSON.stringify([
+       { type: 'user', content: 'full-user' },
+@@ -992,6 +1137,7 @@ describe('useWindowCallbacks integration', () => {
+ 
+     expect(buffer.current.map((message) => message.content)).toEqual(['full-user', 'full-answer']);
+     expect(window.__messageBaseIndex).toBe(0);
++    expect(window.__messageSparseAssistantAnchorIndex).toBeUndefined();
+   });
+ 
+   it('patchMessageUuid updates the latest unresolved user message using raw text fallback', () => {
+@@ -1181,6 +1327,8 @@ describe('useWindowCallbacks integration', () => {
+     });
+     renderHook(() => useWindowCallbacks(opts));
+     window.__prependedHistoryMessageCount = 12;
++    window.__messageBaseIndex = 220;
++    window.__messageSparseAssistantAnchorIndex = 100;
+ 
+     act(() => {
+       window.clearMessages!();
+@@ -1196,6 +1344,137 @@ describe('useWindowCallbacks integration', () => {
+     expect(streamingContentRef.current).toBe('');
+     expect(streamingMessageIndexRef.current).toBe(-1);
+     expect(window.__prependedHistoryMessageCount).toBe(0);
++    expect(window.__messageBaseIndex).toBe(0);
++    expect(window.__messageSparseAssistantAnchorIndex).toBeUndefined();
++  });
++
 +  it('keeps initial and retry attempts visible until real stream activity arrives', () => {
 +    const opts = createOptions();
 +    renderHook(() => useWindowCallbacks(opts));
@@ -3409,11 +3710,9 @@ index 4ff94336..88041869 100644
 +      window.clearMessages?.();
 +    });
 +    expect(opts.setRetryState).toHaveBeenLastCalledWith(null);
-+  });
-+
-   // ===== clearMessages forces a webview repaint to clear JCEF ghosting =====
+   });
  
-   it('clearMessages triggers forceWebviewRepaint to clear leftover ghosting', () => {
+   // ===== clearMessages forces a webview repaint to clear JCEF ghosting =====
 diff --git a/webview/src/hooks/useWindowCallbacks.ts b/webview/src/hooks/useWindowCallbacks.ts
 index 195854f9..fa130440 100644
 --- a/webview/src/hooks/useWindowCallbacks.ts
@@ -3447,7 +3746,7 @@ index 926677cf..7fdf7a00 100644
      setStreamingActive: options.setStreamingActive,
      isStreamingRef: options.isStreamingRef,
 diff --git a/webview/src/hooks/windowCallbacks/registerCallbacks/messageCallbacks.ts b/webview/src/hooks/windowCallbacks/registerCallbacks/messageCallbacks.ts
-index c7561d08..d6c0d730 100644
+index c7561d08..87bfa5aa 100644
 --- a/webview/src/hooks/windowCallbacks/registerCallbacks/messageCallbacks.ts
 +++ b/webview/src/hooks/windowCallbacks/registerCallbacks/messageCallbacks.ts
 @@ -9,6 +9,7 @@
@@ -3568,7 +3867,7 @@ index c7561d08..d6c0d730 100644
      setIsThinking,
      setHistoryData,
      userPausedRef,
-@@ -212,6 +309,7 @@ export function registerMessageCallbacks(
+@@ -212,10 +309,12 @@ export function registerMessageCallbacks(
        const raw = JSON.parse(json) as unknown;
        if (!Array.isArray(raw)) return;
        const backendMessages = raw as ClaudeMessage[];
@@ -3576,7 +3875,12 @@ index c7561d08..d6c0d730 100644
        if (sequence != null) {
          window.__minAcceptedUpdateSequence = Math.max(minAcceptedSequence, sequence);
        }
-@@ -441,6 +539,8 @@ export function registerMessageCallbacks(
+       window.__messageBaseIndex = 0;
++      window.__messageSparseAssistantAnchorIndex = undefined;
+ 
+       setMessages((prev) => {
+         const prependedCount = getPrependedHistoryMessageCount(prev.length);
+@@ -441,6 +540,8 @@ export function registerMessageCallbacks(
      json: string,
      baseIndexArg: string | number,
      sequenceArg?: string | number,
@@ -3585,7 +3889,7 @@ index c7561d08..d6c0d730 100644
    ) => {
      if (window.__sessionTransitioning) return;
      const sequence = parseSequence(sequenceArg);
-@@ -459,23 +559,65 @@ export function registerMessageCallbacks(
+@@ -459,25 +560,80 @@ export function registerMessageCallbacks(
      try {
        const tail = JSON.parse(json) as ClaudeMessage[];
        if (!Array.isArray(tail)) return;
@@ -3610,7 +3914,10 @@ index c7561d08..d6c0d730 100644
 +            anchorMessage = parsedAnchor[0] as ClaudeMessage;
 +          }
 +        } catch (error) {
-+          console.error('[Frontend] Failed to parse message-tail-assistant-anchor-v1:', error);
++          console.error(
++            '[Frontend] Failed to parse message-tail-assistant-anchor-v1/message-tail-sparse-anchor-v2:',
++            error,
++          );
 +          anchorMessage = null;
 +        }
 +      }
@@ -3631,6 +3938,10 @@ index c7561d08..d6c0d730 100644
            : 0;
          const backendMessageCount = prev.length - prependedCount;
          const hasFullPrefix = currentBaseIndex === 0 && baseIndex <= backendMessageCount;
+-        let merged = hasFullPrefix
+-          ? [...prev.slice(0, prependedCount + baseIndex), ...tail]
+-          : [...prependedHistory, ...tail];
+-        window.__messageBaseIndex = hasFullPrefix ? 0 : baseIndex;
 +
 +        let current = prev;
 +        if (anchorMessage && Number.isSafeInteger(anchorIndex)) {
@@ -3649,13 +3960,24 @@ index c7561d08..d6c0d730 100644
 +        const prependedHistory = prependedCount > 0
 +          ? current.slice(0, prependedCount)
 +          : [];
-         let merged = hasFullPrefix
--          ? [...prev.slice(0, prependedCount + baseIndex), ...tail]
-+          ? [...current.slice(0, prependedCount + baseIndex), ...tail]
-           : [...prependedHistory, ...tail];
-         window.__messageBaseIndex = hasFullPrefix ? 0 : baseIndex;
++        let merged: ClaudeMessage[];
++        if (hasFullPrefix) {
++          merged = [...current.slice(0, prependedCount + baseIndex), ...tail];
++          window.__messageBaseIndex = 0;
++          window.__messageSparseAssistantAnchorIndex = undefined;
++        } else {
++          merged = [
++            ...prependedHistory,
++            ...(anchorMessage ? [anchorMessage] : []),
++            ...tail,
++          ];
++          window.__messageBaseIndex = baseIndex;
++          window.__messageSparseAssistantAnchorIndex = anchorMessage ? anchorIndex : undefined;
++        }
  
-@@ -598,6 +740,13 @@ export function registerMessageCallbacks(
+         merged = appendOptimisticMessageIfMissing(prev, merged);
+         merged = preserveLastAssistantIdentity(prev, merged, findLastAssistantIndex);
+@@ -598,6 +754,13 @@ export function registerMessageCallbacks(
      addToast(text);
    };
  
@@ -3669,7 +3991,7 @@ index c7561d08..d6c0d730 100644
    window.showLoading = (value) => {
      const isLoading = isTruthy(value);
  
-@@ -606,6 +755,10 @@ export function registerMessageCallbacks(
+@@ -606,6 +769,10 @@ export function registerMessageCallbacks(
        return;
      }
  
@@ -3680,7 +4002,12 @@ index c7561d08..d6c0d730 100644
      // Notify backend about loading state change for tab indicator
      sendBridgeEvent('tab_loading_changed', JSON.stringify({ loading: isLoading }));
  
-@@ -747,6 +900,7 @@ export function registerMessageCallbacks(
+@@ -743,10 +910,12 @@ export function registerMessageCallbacks(
+     pendingCodexHistoryPages.clear();
+     window.__prependedHistoryMessageCount = 0;
+     window.__messageBaseIndex = 0;
++    window.__messageSparseAssistantAnchorIndex = undefined;
+     window.__lastAcceptedMessageCount = undefined;
      window.__pendingHistoryRefreshMessageCount = undefined;
      window.__historySurfaceRefreshEpoch = (window.__historySurfaceRefreshEpoch ?? 0) + 1;
      resetTransientUiState();
@@ -3688,6 +4015,17 @@ index c7561d08..d6c0d730 100644
      closeContextUsageDialog();
      setMessages([]);
    };
+@@ -874,6 +1043,10 @@ export function registerMessageCallbacks(
+       window.__prependedHistoryMessageCount = pending.mode === 'replace'
+         ? 0
+         : prependedCount + pageMessages.length;
++      if (pending.mode === 'replace') {
++        window.__messageBaseIndex = 0;
++        window.__messageSparseAssistantAnchorIndex = undefined;
++      }
+       if (pending.mode === 'prepend'
+           && isStreamingRef.current
+           && streamingMessageIndexRef.current >= 0) {
 diff --git a/webview/src/hooks/windowCallbacks/registerCallbacks/streamingCallbacks.ts b/webview/src/hooks/windowCallbacks/registerCallbacks/streamingCallbacks.ts
 index 1b971fe7..8dc3e460 100644
 --- a/webview/src/hooks/windowCallbacks/registerCallbacks/streamingCallbacks.ts

@@ -40,7 +40,7 @@ webview_html="$(unzip -p "$plugin_jar" html/claude-chat.html)" || \
   die "Embedded WebView missing: html/claude-chat.html"
 webview_markers=(onCodexRetryState codex-retry-status)
 if [[ "$VERSION" == 'v0.5.2' ]]; then
-  webview_markers+=(message-tail-assistant-anchor-v1)
+  webview_markers+=(message-tail-assistant-anchor-v1 message-tail-sparse-anchor-v2)
 fi
 for marker in "${webview_markers[@]}"; do
   if ! grep -Fq "$marker" <<< "$webview_html"; then

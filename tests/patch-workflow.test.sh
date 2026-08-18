@@ -208,6 +208,10 @@ test_retry_progress_patch_contains_bridge_and_ui_protocol() {
     fail "v0.5.2 session polling marker missing"
   [[ "$patch" == *"message-tail-assistant-anchor-v1"* ]] || \
     fail "v0.5.2 sparse assistant anchor marker missing"
+  [[ "$patch" == *"codex-bounded-history-window-v1"* ]] || \
+    fail "v0.5.2 bounded history replay marker missing"
+  [[ "$patch" == *"message-tail-sparse-anchor-v2"* ]] || \
+    fail "v0.5.2 tail-only sparse anchor marker missing"
 }
 
 test_latest_release_has_versioned_retry_inputs() {
@@ -220,8 +224,8 @@ test_latest_release_has_versioned_retry_inputs() {
     .upstream.tag == "v0.5.2" and
     .upstream.commit == "077cccff6707c11796fb0fbd3445b66abd97f83e" and
     .pluginVersion == "0.5.2" and
-    .patchedPluginVersion == "0.5.2-retry.4" and
-    .artifact == "ccgui-0.5.2-retry.4.zip"
+    .patchedPluginVersion == "0.5.2-retry.5" and
+    .artifact == "ccgui-0.5.2-retry.5.zip"
   ' "$manifest" >/dev/null || fail "v0.5.2 manifest is not pinned to the latest release"
 }
 
@@ -234,7 +238,8 @@ test_artifact_verifier_checks_plugin_metadata_and_webview() {
     'onCodexRetryState' \
     'codex-retry-status' \
     'CODEX_SESSION_POLL_INTERVAL_MS' \
-    'message-tail-assistant-anchor-v1'; do
+    'message-tail-assistant-anchor-v1' \
+    'message-tail-sparse-anchor-v2'; do
     [[ "$verifier" == *"$marker"* ]] || fail "artifact verifier does not check: $marker"
   done
 }
