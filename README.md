@@ -59,10 +59,12 @@ tool and result blocks are not held until stream completion. Automatic Codex
 restore and background reconciliation stream the session JSONL into a bounded
 window containing the latest 180 converted messages plus an omitted current
 assistant anchor. Explicit export and paginated history browsing remain
-unchanged. For conversations longer than 300 messages, the first and later
-WebView updates use the same bounded tail and sparse indexed anchor. This keeps
-new thinking and tool blocks visible after more than 180 tool results have
-accumulated without replaying the full session through JCEF.
+unchanged. Hidden Responses `exec` wrappers are reconstructed as normal Bash
+tool cards within this bounded path. For conversations longer than 300
+messages, the first and later WebView updates use the same bounded tail and
+sparse indexed anchor. This keeps new thinking and tool blocks visible after
+more than 180 tool results have accumulated without replaying the full session
+through JCEF.
 
 Malformed payloads and unknown reason categories are ignored. Terminal 400, 401,
 403, and daily-limit 429 errors clear retry progress and follow the existing

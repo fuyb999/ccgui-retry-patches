@@ -1817,10 +1817,18 @@ index 264cbfc4..dfde6e3a 100644
  java {
      sourceCompatibility = JavaVersion.VERSION_17
 diff --git a/src/main/java/com/github/claudecodegui/handler/history/HistoryMessageInjector.java b/src/main/java/com/github/claudecodegui/handler/history/HistoryMessageInjector.java
-index fee7101e..201b538a 100644
+index fee7101e..cecf2ec2 100644
 --- a/src/main/java/com/github/claudecodegui/handler/history/HistoryMessageInjector.java
 +++ b/src/main/java/com/github/claudecodegui/handler/history/HistoryMessageInjector.java
-@@ -472,6 +472,65 @@ public class HistoryMessageInjector {
+@@ -27,6 +27,7 @@ import java.util.Base64;
+ import java.util.Deque;
+ import java.util.HashMap;
+ import java.util.HashSet;
++import java.util.LinkedHashMap;
+ import java.util.List;
+ import java.util.Map;
+ import java.util.Set;
+@@ -472,6 +473,169 @@ public class HistoryMessageInjector {
          return frontendMessages;
      }
  
@@ -1841,46 +1849,150 @@ index fee7101e..201b538a 100644
 +            throw new IllegalArgumentException("Codex history tail size must be positive");
 +        }
 +
-+        Deque<JsonObject> recentMessages = new ArrayDeque<>(tailSize);
-+        JsonObject[] latestAssistant = new JsonObject[1];
-+        int[] emittedMessageCount = new int[1];
-+        CodexFrontendMessageAccumulator accumulator = new CodexFrontendMessageAccumulator(message -> {
-+            if (message == null) {
-+                return;
-+            }
-+            emittedMessageCount[0]++;
-+            if ("assistant".equals(getStringProperty(message, "type"))) {
-+                latestAssistant[0] = message;
-+            }
-+            recentMessages.addLast(message);
-+            while (recentMessages.size() > tailSize) {
-+                recentMessages.removeFirst();
-+            }
-+        });
-+
-+        int rawRecordCount = reader.forEachSessionMessage(sessionId, accumulator::accept);
-+        accumulator.finish();
-+
-+        List<JsonObject> boundedMessages = new ArrayList<>(recentMessages.size() + 1);
-+        JsonObject anchor = latestAssistant[0];
-+        boolean anchorInTail = false;
-+        for (JsonObject message : recentMessages) {
-+            if (message == anchor) {
-+                anchorInTail = true;
-+                break;
-+            }
-+        }
-+        if (anchor != null && !anchorInTail) {
-+            boundedMessages.add(anchor);
-+        }
-+        boundedMessages.addAll(recentMessages);
++        BoundedFrontendMessageCollector collector =
++                new BoundedFrontendMessageCollector(tailSize);
++        BoundedCodexFrontendReplay replay =
++                new BoundedCodexFrontendReplay(collector, tailSize);
++        int rawRecordCount = reader.forEachSessionMessage(sessionId, replay::accept);
++        replay.finish();
++        List<JsonObject> boundedMessages = collector.snapshot();
 +
 +        LOG.info("[HistoryHandler] codex-bounded-history-window-v1 session=" + sessionId
 +                + ", rawRecords=" + rawRecordCount
-+                + ", emittedMessages=" + emittedMessageCount[0]
-+                + ", tailMessages=" + recentMessages.size()
-+                + ", anchorInserted=" + (anchor != null && !anchorInTail));
++                + ", emittedMessages=" + collector.emittedMessageCount
++                + ", retainedMessages=" + boundedMessages.size()
++                + ", tailSize=" + tailSize);
 +        return boundedMessages;
++    }
++
++    private static final class BoundedCodexFrontendReplay {
++        private final CodexFrontendMessageAccumulator accumulator;
++        private final Map<String, PendingInternalToolCall> pendingInternalToolCalls;
++
++        private BoundedCodexFrontendReplay(
++                BoundedFrontendMessageCollector collector,
++                int maxPendingInternalCalls
++        ) {
++            this.accumulator = new CodexFrontendMessageAccumulator(collector::accept);
++            this.pendingInternalToolCalls = new LinkedHashMap<>() {
++                @Override
++                protected boolean removeEldestEntry(
++                        Map.Entry<String, PendingInternalToolCall> eldest
++                ) {
++                    return size() > maxPendingInternalCalls;
++                }
++            };
++        }
++
++        private void accept(JsonObject rawMessage) {
++            JsonObject payload = getResponseItemPayload(rawMessage);
++            if (isInternalHistoryToolCall(payload)) {
++                acceptInternalToolCall(rawMessage, payload);
++                return;
++            }
++
++            if (isToolOutputPayload(payload)) {
++                String callId = getStringProperty(payload, "call_id");
++                PendingInternalToolCall pending = callId == null
++                        ? null : pendingInternalToolCalls.remove(callId);
++                if (pending != null) {
++                    if (!pending.commands.isEmpty()) {
++                        accumulator.acceptConverted(CodexExecHistoryReplay.createToolResultMessage(
++                                callId,
++                                pending.commands,
++                                new CodexExecHistoryReplay.Output(
++                                        payload,
++                                        getStringProperty(rawMessage, "timestamp")
++                                ),
++                                pending.timestamp
++                        ));
++                    }
++                    return;
++                }
++            }
++
++            accumulator.accept(rawMessage);
++        }
++
++        private void acceptInternalToolCall(JsonObject rawMessage, JsonObject payload) {
++            String callId = getStringProperty(payload, "call_id");
++            if (callId == null || callId.isBlank()) {
++                return;
++            }
++
++            String timestamp = getStringProperty(rawMessage, "timestamp");
++            List<CodexExecHistoryReplay.Command> commands = CodexExecHistoryReplay.isExecCall(payload)
++                    ? CodexExecHistoryReplay.extractCommands(payload)
++                    : List.of();
++            pendingInternalToolCalls.put(
++                    callId,
++                    new PendingInternalToolCall(commands, timestamp)
++            );
++            if (!commands.isEmpty()) {
++                accumulator.acceptConverted(
++                        CodexExecHistoryReplay.createToolUseMessage(callId, commands, timestamp)
++                );
++            }
++        }
++
++        private void finish() {
++            accumulator.finish();
++        }
++    }
++
++    private static final class BoundedFrontendMessageCollector {
++        private final int tailSize;
++        private final Deque<JsonObject> tail;
++        private JsonObject latestAssistant;
++        private int emittedMessageCount;
++
++        private BoundedFrontendMessageCollector(int tailSize) {
++            this.tailSize = tailSize;
++            this.tail = new ArrayDeque<>(tailSize);
++        }
++
++        private void accept(JsonObject message) {
++            if (message == null) {
++                return;
++            }
++            emittedMessageCount++;
++            if ("assistant".equals(getStringProperty(message, "type"))) {
++                latestAssistant = message;
++            }
++            tail.addLast(message);
++            while (tail.size() > tailSize) {
++                tail.removeFirst();
++            }
++        }
++
++        private List<JsonObject> snapshot() {
++            List<JsonObject> result = new ArrayList<>(tail.size() + 1);
++            boolean assistantInTail = false;
++            for (JsonObject message : tail) {
++                if (message == latestAssistant) {
++                    assistantInTail = true;
++                    break;
++                }
++            }
++            if (latestAssistant != null && !assistantInTail) {
++                result.add(latestAssistant);
++            }
++            result.addAll(tail);
++            return result;
++        }
++    }
++
++    private static final class PendingInternalToolCall {
++        private final List<CodexExecHistoryReplay.Command> commands;
++        private final String timestamp;
++
++        private PendingInternalToolCall(
++                List<CodexExecHistoryReplay.Command> commands,
++                String timestamp
++        ) {
++            this.commands = commands;
++            this.timestamp = timestamp;
++        }
 +    }
 +
      /**
@@ -2456,10 +2568,10 @@ index a7447259..1c474ad3 100644
              public void setFrontendReady(boolean ready) {
                  updateFrontendReadyState(ready);
 diff --git a/src/test/java/com/github/claudecodegui/provider/codex/CodexSDKBridgeHistoryTest.java b/src/test/java/com/github/claudecodegui/provider/codex/CodexSDKBridgeHistoryTest.java
-index 4149893b..43d06005 100644
+index 4149893b..d1a29786 100644
 --- a/src/test/java/com/github/claudecodegui/provider/codex/CodexSDKBridgeHistoryTest.java
 +++ b/src/test/java/com/github/claudecodegui/provider/codex/CodexSDKBridgeHistoryTest.java
-@@ -47,6 +47,44 @@ public class CodexSDKBridgeHistoryTest {
+@@ -47,6 +47,82 @@ public class CodexSDKBridgeHistoryTest {
          }
      }
  
@@ -2496,6 +2608,44 @@ index 4149893b..43d06005 100644
 +                        .getAsJsonArray("content").get(0).getAsJsonObject()
 +                        .get("content").getAsString());
 +            }
++        } finally {
++            deleteDirectory(sessionsDir);
++        }
++    }
++
++    @Test
++    public void getSessionMessagesReplaysExecWrapperInsideBoundedHistory() throws IOException {
++        Path sessionsDir = Files.createTempDirectory("codex-sdk-bridge-history-bounded-exec");
++        try {
++            writeSessionFile(
++                    sessionsDir,
++                    "session-bounded-exec",
++                    line("2026-03-10T10:00:00Z", "response_item",
++                            "{\"type\":\"custom_tool_call\",\"call_id\":\"exec-1\",\"name\":\"exec\","
++                                    + "\"input\":\"const r = await tools.shell_command({command:'git status',"
++                                    + "workdir:'/tmp',timeout_ms:5000}); text(r);\"}"),
++                    line("2026-03-10T10:00:01Z", "response_item",
++                            "{\"type\":\"custom_tool_call_output\",\"call_id\":\"exec-1\","
++                                    + "\"output\":\"Exit code: 0\\nOutput:\\nOn branch main\"}")
++            );
++
++            List<JsonObject> messages = new CodexSDKBridge(sessionsDir)
++                    .getSessionMessages("session-bounded-exec", sessionsDir.toString());
++
++            assertEquals(2, messages.size());
++            JsonObject toolUse = messages.get(0).getAsJsonObject("raw")
++                    .getAsJsonArray("content").get(0).getAsJsonObject();
++            assertEquals("assistant", messages.get(0).get("type").getAsString());
++            assertEquals("tool_use", toolUse.get("type").getAsString());
++            assertEquals("bash", toolUse.get("name").getAsString());
++            assertEquals("git status", toolUse.getAsJsonObject("input").get("command").getAsString());
++
++            JsonObject toolResult = messages.get(1).getAsJsonObject("raw")
++                    .getAsJsonArray("content").get(0).getAsJsonObject();
++            assertEquals("user", messages.get(1).get("type").getAsString());
++            assertEquals("tool_result", toolResult.get("type").getAsString());
++            assertEquals(toolUse.get("id").getAsString(), toolResult.get("tool_use_id").getAsString());
++            assertTrue(toolResult.get("content").getAsString().contains("On branch main"));
 +        } finally {
 +            deleteDirectory(sessionsDir);
 +        }

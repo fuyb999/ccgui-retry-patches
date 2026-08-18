@@ -212,6 +212,8 @@ test_retry_progress_patch_contains_bridge_and_ui_protocol() {
     fail "v0.5.2 bounded history replay marker missing"
   [[ "$patch" == *"message-tail-sparse-anchor-v2"* ]] || \
     fail "v0.5.2 tail-only sparse anchor marker missing"
+  [[ "$patch" == *"getSessionMessagesReplaysExecWrapperInsideBoundedHistory"* ]] || \
+    fail "v0.5.2 bounded exec-wrapper regression test missing"
 }
 
 test_latest_release_has_versioned_retry_inputs() {
