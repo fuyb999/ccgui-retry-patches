@@ -55,10 +55,15 @@ bridge_archive="${bridge_archives[0]}"
 unzip -tq "$bridge_archive" >/dev/null || die "Embedded ai-bridge.zip integrity check failed"
 
 bridge_entries="$(unzip -Z1 "$bridge_archive")"
-for required_path in \
-  services/codex/codex-retry.js \
-  services/codex/message-service.js \
-  services/codex/codex-event-handler.js; do
+required_bridge_paths=(
+  services/codex/codex-retry.js
+  services/codex/message-service.js
+  services/codex/codex-event-handler.js
+)
+if [[ "$VERSION" == 'v0.5.2' ]]; then
+  required_bridge_paths+=(services/codex/codex-fork.js)
+fi
+for required_path in "${required_bridge_paths[@]}"; do
   if ! printf '%s\n' "$bridge_entries" | grep -Eq "(^|/)$required_path$"; then
     die "Embedded bridge file missing: $required_path"
   fi
@@ -68,8 +73,52 @@ message_service_entry="$(printf '%s\n' "$bridge_entries" | grep -E '(^|/)service
 [[ -n "$message_service_entry" ]] || die "Embedded bridge message service missing"
 message_service="$(unzip -p "$bridge_archive" "$message_service_entry")" || \
   die "Unable to read embedded Codex message service"
-if ! grep -Fq 'CODEX_SESSION_POLL_INTERVAL_MS' <<< "$message_service"; then
+if [[ "$VERSION" == 'v0.5.2' ]] && ! grep -Fq 'CODEX_SESSION_POLL_INTERVAL_MS' <<< "$message_service"; then
   die "Embedded Codex session polling marker missing"
+fi
+if [[ "$VERSION" == 'v0.5.2' ]]; then
+  for marker in \
+    'readCodexStableBoundary' \
+    'createCodexRetryAttempt' \
+    'requiresFork' \
+    'publishThreadId' \
+    'Codex SDK stream ended before turn completion' \
+    'Codex SDK 0.148.0 or newer is required'; do
+    if ! grep -Fq "$marker" <<< "$message_service"; then
+      die "Embedded reliable retry marker missing: $marker"
+    fi
+  done
+
+  fork_entry="$(printf '%s\n' "$bridge_entries" | grep -E '(^|/)services/codex/codex-fork\.js$' | head -n 1)"
+  [[ -n "$fork_entry" ]] || die "Embedded Codex fork adapter missing"
+  fork_source="$(unzip -p "$bridge_archive" "$fork_entry")" || \
+    die "Unable to read embedded Codex fork adapter"
+  for marker in \
+    "'app-server'" \
+    "method: 'thread/fork'" \
+    'lastTurnId' \
+    "method: 'thread/delete'"; do
+    if ! grep -Fq "$marker" <<< "$fork_source"; then
+      die "Embedded Codex App Server fork marker missing: $marker"
+    fi
+  done
+  if grep -Fq "'exec', 'fork'" <<< "$fork_source"; then
+    die "Embedded Codex adapter still uses unreliable exec fork"
+  fi
+
+  event_handler_entry="$(printf '%s\n' "$bridge_entries" | grep -E '(^|/)services/codex/codex-event-handler\.js$' | head -n 1)"
+  [[ -n "$event_handler_entry" ]] || die "Embedded Codex event handler missing"
+  event_handler_source="$(unzip -p "$bridge_archive" "$event_handler_entry")" || \
+    die "Unable to read embedded Codex event handler"
+  if ! grep -Fq 'config.publishThreadId !== false' <<< "$event_handler_source"; then
+    die "Embedded Codex event handler publishes disposable retry thread IDs"
+  fi
+
+  sdk_definition_entry="$(unzip -Z1 "$plugin_jar" | grep -E '(^|/)SdkDefinition\.class$' | head -n 1)"
+  [[ -n "$sdk_definition_entry" ]] || die "Compiled Codex SDK definition missing"
+  if ! unzip -p "$plugin_jar" "$sdk_definition_entry" | grep -aFq '0.148.0'; then
+    die "Compiled Codex SDK 0.148.0 requirement missing"
+  fi
 fi
 
 printf 'Verified %s\n' "$artifact"

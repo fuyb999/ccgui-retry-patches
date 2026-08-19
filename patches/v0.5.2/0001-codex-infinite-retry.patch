@@ -1,5 +1,5 @@
 diff --git a/ai-bridge/services/codex/codex-event-handler.js b/ai-bridge/services/codex/codex-event-handler.js
-index b519699c..ffaefed3 100644
+index b519699ca4138228d118d37872999ba572214cd0..aeeec66e9a4b8b97aeed6d368d192f07bb529dbd 100644
 --- a/ai-bridge/services/codex/codex-event-handler.js
 +++ b/ai-bridge/services/codex/codex-event-handler.js
 @@ -34,6 +34,7 @@ import {
@@ -10,7 +10,11 @@ index b519699c..ffaefed3 100644
  
  const COMMAND_DENIED_ABORT_ERROR = '__CODEX_COMMAND_DENIED_ABORT__';
  const CODEX_USAGE_FIELDS = [
-@@ -273,7 +274,7 @@ export function createInitialEventState(emitMessage) {
+@@ -270,10 +271,11 @@ export function createInitialEventState(emitMessage) {
+     deniedCommandToolUseIds: new Set(),
+     emittedDeniedCommandToolResultIds: new Set(),
+     sessionFilePath: null,
++    sessionFileThreadId: null,
      sessionLineCursor: 0,
      sessionReplayBaselineCursor: null,
      sessionReplayBaselinePrepared: false,
@@ -19,7 +23,7 @@ index b519699c..ffaefed3 100644
      sessionTurnStartCursor: null,
      sessionTurnBoundaryReady: false,
      sessionTurnBoundaryWarningLogged: false,
-@@ -284,6 +285,7 @@ export function createInitialEventState(emitMessage) {
+@@ -284,6 +286,7 @@ export function createInitialEventState(emitMessage) {
      processedSessionCustomToolCallIds: new Set(),
      processedSessionCustomToolOutputIds: new Set(),
      reasoningTextCache: new Map(),
@@ -27,7 +31,21 @@ index b519699c..ffaefed3 100644
      assistantTextCache: new Map(),
      reasoningObserved: false,
      commandApprovalAbortRequested: false,
-@@ -352,7 +354,7 @@ function countSessionJsonlLines(content) {
+@@ -329,8 +332,12 @@ function ensureToolUseId(state, phase, item) {
+ }
+ 
+ function ensureSessionFilePath(state, threadId) {
+-  if (state.sessionFilePath && existsSync(state.sessionFilePath)) return state.sessionFilePath;
+   if (!threadId) return null;
++  if (state.sessionFileThreadId && state.sessionFileThreadId !== threadId) {
++    state.sessionFilePath = null;
++  }
++  state.sessionFileThreadId = threadId;
++  if (state.sessionFilePath && existsSync(state.sessionFilePath)) return state.sessionFilePath;
+   state.sessionFilePath = findSessionFileByThreadId(threadId);
+   return state.sessionFilePath;
+ }
+@@ -352,7 +359,7 @@ function countSessionJsonlLines(content) {
  export async function prepareSessionReplayBoundary(state, threadId) {
    state.sessionReplayBaselinePrepared = true;
    state.sessionReplayBaselineCursor = threadId ? null : 0;
@@ -36,7 +54,7 @@ index b519699c..ffaefed3 100644
    state.sessionTurnStartCursor = null;
    state.sessionTurnBoundaryReady = false;
    state.sessionTurnBoundaryWarningLogged = false;
-@@ -364,7 +366,7 @@ export async function prepareSessionReplayBoundary(state, threadId) {
+@@ -364,7 +371,7 @@ export async function prepareSessionReplayBoundary(state, threadId) {
  
    const sessionPath = ensureSessionFilePath(state, threadId);
    if (!sessionPath) {
@@ -45,7 +63,7 @@ index b519699c..ffaefed3 100644
      return;
    }
  
-@@ -374,7 +376,7 @@ export async function prepareSessionReplayBoundary(state, threadId) {
+@@ -374,7 +381,7 @@ export async function prepareSessionReplayBoundary(state, threadId) {
      state.sessionReplayBaselineCursor = baseline;
      state.sessionLineCursor = baseline;
    } catch (error) {
@@ -54,7 +72,7 @@ index b519699c..ffaefed3 100644
    }
  }
  
-@@ -408,7 +410,7 @@ async function ensureSessionTurnBoundary(state, config) {
+@@ -408,7 +415,7 @@ async function ensureSessionTurnBoundary(state, config) {
  
      const boundaryCursor = i + 1;
      state.sessionTurnStartCursor = boundaryCursor;
@@ -63,7 +81,7 @@ index b519699c..ffaefed3 100644
      state.sessionTurnBoundaryReady = true;
      logDebug('SESSION_REPLAY', `Established current turn boundary at session line ${boundaryCursor}.`);
      return true;
-@@ -420,7 +422,7 @@ async function ensureSessionTurnBoundary(state, config) {
+@@ -420,7 +427,7 @@ async function ensureSessionTurnBoundary(state, config) {
  function warnSessionTurnBoundaryNotReady(state) {
    if (state.sessionTurnBoundaryWarningLogged) return;
    state.sessionTurnBoundaryWarningLogged = true;
@@ -72,7 +90,7 @@ index b519699c..ffaefed3 100644
  }
  
  async function readLatestTurnContextFromSession(state, threadId) {
-@@ -516,27 +518,38 @@ async function collectPatchOperationsFromSession(state, config) {
+@@ -516,27 +523,38 @@ async function collectPatchOperationsFromSession(state, config) {
    return batches;
  }
  
@@ -118,7 +136,7 @@ index b519699c..ffaefed3 100644
    let toolUses = 0;
    let toolResults = 0;
  
-@@ -550,6 +563,18 @@ async function replayMissingFunctionCallsFromSession(state, config) {
+@@ -550,6 +568,18 @@ async function replayMissingFunctionCallsFromSession(state, config) {
  
      const payload = parsed.payload;
      const payloadType = payload.type;
@@ -137,7 +155,7 @@ index b519699c..ffaefed3 100644
      if (payloadType === 'function_call') {
        const callId = typeof payload.call_id === 'string' && payload.call_id ? payload.call_id : `line_${i}`;
        if (state.processedSessionFunctionCallIds.has(callId)) continue;
-@@ -590,16 +615,16 @@ async function replayMissingFunctionCallsFromSession(state, config) {
+@@ -590,16 +620,16 @@ async function replayMissingFunctionCallsFromSession(state, config) {
      }
    }
  
@@ -159,7 +177,7 @@ index b519699c..ffaefed3 100644
  }
  
  function buildPermissionInputForPatchOperation(operation) {
-@@ -763,20 +788,27 @@ function emitThinkingBlock(state, text) {
+@@ -763,20 +793,27 @@ function emitThinkingBlock(state, text) {
  }
  
  function maybeEmitReasoning(state, item) {
@@ -191,7 +209,18 @@ index b519699c..ffaefed3 100644
  }
  
  async function maybeLogRuntimePolicy(state, config) {
-@@ -964,7 +996,12 @@ export async function processCodexEventStream(events, state, config) {
+@@ -946,7 +983,9 @@ export async function processCodexEventStream(events, state, config) {
+       switch (event.type) {
+       case 'thread.started': {
+         state.currentThreadId = event.thread_id;
+-        console.log('[THREAD_ID]', state.currentThreadId);
++        if (config.publishThreadId !== false) {
++          console.log('[THREAD_ID]', state.currentThreadId);
++        }
+         break;
+       }
+ 
+@@ -964,7 +1003,12 @@ export async function processCodexEventStream(events, state, config) {
          if (state.turnStarted && event?.payload?.type === 'token_count') {
            handleTokenCountEvent(event, state);
          }
@@ -205,7 +234,7 @@ index b519699c..ffaefed3 100644
          break;
        }
  
-@@ -997,7 +1034,7 @@ export async function processCodexEventStream(events, state, config) {
+@@ -997,7 +1041,7 @@ export async function processCodexEventStream(events, state, config) {
            }
            rememberToolInvocation(state, toolUseId, toolName, toolInput);
          }
@@ -214,7 +243,7 @@ index b519699c..ffaefed3 100644
          break;
        }
  
-@@ -1006,22 +1043,22 @@ export async function processCodexEventStream(events, state, config) {
+@@ -1006,22 +1050,22 @@ export async function processCodexEventStream(events, state, config) {
          if (event.item && event.item.type === 'agent_message') {
            handleAgentMessage(event.item, state, { emitSnapshot: false });
          }
@@ -241,7 +270,7 @@ index b519699c..ffaefed3 100644
          }
          const replayedTokenCounts = await replayCurrentTurnTokenCountsFromSession(state, config);
          if (replayedTokenCounts > 0) {
-@@ -1061,11 +1098,8 @@ export async function processCodexEventStream(events, state, config) {
+@@ -1061,11 +1105,8 @@ export async function processCodexEventStream(events, state, config) {
            logInfo('PERM_DEBUG', `Ignore turn.failed after command denial abort: ${errorMsg}`);
            break;
          }
@@ -254,7 +283,7 @@ index b519699c..ffaefed3 100644
        }
  
        case 'error': {
-@@ -1079,11 +1113,8 @@ export async function processCodexEventStream(events, state, config) {
+@@ -1079,11 +1120,8 @@ export async function processCodexEventStream(events, state, config) {
            logInfo('PERM_DEBUG', `Ignore error event after command denial abort: ${generalError}`);
            break;
          }
@@ -268,7 +297,7 @@ index b519699c..ffaefed3 100644
  
        default: {
 diff --git a/ai-bridge/services/codex/codex-event-handler.test.js b/ai-bridge/services/codex/codex-event-handler.test.js
-index 5c4c9816..1c12c3b9 100644
+index 5c4c981651e2796beadf827c6b03fde3b3063d22..bcfb4c38c7538c4f66171e56783656e46daf080b 100644
 --- a/ai-bridge/services/codex/codex-event-handler.test.js
 +++ b/ai-bridge/services/codex/codex-event-handler.test.js
 @@ -9,6 +9,7 @@ import {
@@ -279,7 +308,7 @@ index 5c4c9816..1c12c3b9 100644
  
  async function* eventsFrom(items) {
    for (const item of items) {
-@@ -57,6 +58,45 @@ const CUSTOM_EXEC_PATCH = [
+@@ -57,6 +58,65 @@ const CUSTOM_EXEC_PATCH = [
  
  const CUSTOM_EXEC_SOURCE = `const patch = ${JSON.stringify(CUSTOM_EXEC_PATCH)}; text(await tools.apply_patch(patch));`;
  
@@ -322,10 +351,30 @@ index 5c4c9816..1c12c3b9 100644
 +  assert.equal(turnFailedCalls, 0);
 +});
 +
++test('session replay does not reuse a source file after switching retry threads', async () => {
++  const tempDir = await mkdtemp(join(tmpdir(), 'codex-retry-thread-switch-'));
++  const sourcePath = join(tempDir, 'source.jsonl');
++  try {
++    await writeFile(sourcePath, '{"type":"turn_context"}\n', 'utf8');
++    const state = createInitialEventState(() => {});
++    state.sessionFilePath = sourcePath;
++    state.sessionFileThreadId = 'source-thread';
++
++    await prepareSessionReplayBoundary(state, 'missing-child-thread');
++
++    assert.equal(state.sessionFilePath, null);
++    assert.equal(state.sessionFileThreadId, 'missing-child-thread');
++    assert.equal(state.sessionReplayBaselineCursor, null);
++    assert.equal(state.sessionLineCursor, 0);
++  } finally {
++    await rm(tempDir, { recursive: true, force: true });
++  }
++});
++
  test('custom_tool_call exec apply_patch emits edit and result messages without file_change', async () => {
    const emittedMessages = [];
    const state = createInitialEventState((message) => emittedMessages.push(message));
-@@ -156,6 +196,163 @@ test('current-turn session replay emits custom_tool_call exec patches found only
+@@ -156,6 +216,163 @@ test('current-turn session replay emits custom_tool_call exec patches found only
    }
  });
  
@@ -489,12 +538,1328 @@ index 5c4c9816..1c12c3b9 100644
  test('token_count forwards current context and derives turn usage from cumulative deltas', async () => {
    const emittedMessages = [];
    const state = createInitialEventState((message) => emittedMessages.push(message));
+diff --git a/ai-bridge/services/codex/codex-fork.js b/ai-bridge/services/codex/codex-fork.js
+new file mode 100644
+index 0000000000000000000000000000000000000000..0f45376340fe54018ccec4301d8ecd77183369cb
+--- /dev/null
++++ b/ai-bridge/services/codex/codex-fork.js
+@@ -0,0 +1,627 @@
++import { spawn as defaultSpawn } from 'node:child_process';
++import { delimiter as pathDelimiter } from 'node:path';
++import { createInterface } from 'node:readline';
++
++const CODEX_APP_SERVER_CLIENT_INFO = Object.freeze({
++  name: 'ccgui_retry_bridge',
++  title: 'CC GUI Retry Bridge',
++  version: '0.5.2-retry.6',
++});
++const TYPESCRIPT_SDK_ORIGINATOR = 'codex_sdk_ts';
++const APP_SERVER_KILL_GRACE_MS = 1_000;
++
++export const CODEX_RETRY_RECOVERY_PREFIX = [
++  '[CC GUI retry recovery]',
++  'A previous attempt may have changed external state before it failed.',
++  'Inspect the current state first and do not repeat actions that already completed.',
++].join('\n');
++
++export class CodexAppServerError extends Error {
++  constructor(message, details = {}) {
++    super(message);
++    this.name = 'CodexAppServerError';
++    this.code = 'SERVER_ERROR';
++    this.details = details;
++  }
++}
++
++function isPlainObject(value) {
++  return typeof value === 'object' && value !== null && !Array.isArray(value);
++}
++
++function formatTomlKey(key) {
++  return /^[A-Za-z0-9_-]+$/.test(key) ? key : JSON.stringify(key);
++}
++
++function toTomlValue(value, path) {
++  if (typeof value === 'string') return JSON.stringify(value);
++  if (typeof value === 'number') {
++    if (!Number.isFinite(value)) {
++      throw new CodexAppServerError('Codex App Server config is invalid', {
++        category: 'runtime',
++      });
++    }
++    return `${value}`;
++  }
++  if (typeof value === 'boolean') return value ? 'true' : 'false';
++  if (Array.isArray(value)) {
++    return `[${value.map((item, index) => toTomlValue(item, `${path}[${index}]`)).join(', ')}]`;
++  }
++  if (isPlainObject(value)) {
++    const parts = [];
++    for (const [key, child] of Object.entries(value)) {
++      if (!key) {
++        throw new CodexAppServerError('Codex App Server config is invalid', {
++          category: 'runtime',
++        });
++      }
++      if (child === undefined) continue;
++      parts.push(`${formatTomlKey(key)} = ${toTomlValue(child, `${path}.${key}`)}`);
++    }
++    return `{${parts.join(', ')}}`;
++  }
++  throw new CodexAppServerError('Codex App Server config is invalid', {
++    category: 'runtime',
++  });
++}
++
++function flattenConfigOverrides(value, prefix = '', output = []) {
++  if (!isPlainObject(value)) {
++    if (!prefix) {
++      throw new CodexAppServerError('Codex App Server config is invalid', {
++        category: 'runtime',
++      });
++    }
++    output.push(`${prefix}=${toTomlValue(value, prefix)}`);
++    return output;
++  }
++
++  const entries = Object.entries(value);
++  if (prefix && entries.length === 0) {
++    output.push(`${prefix}={}`);
++    return output;
++  }
++  for (const [key, child] of entries) {
++    if (!key) {
++      throw new CodexAppServerError('Codex App Server config is invalid', {
++        category: 'runtime',
++      });
++    }
++    if (child === undefined) continue;
++    const path = prefix ? `${prefix}.${key}` : key;
++    if (isPlainObject(child)) flattenConfigOverrides(child, path, output);
++    else output.push(`${path}=${toTomlValue(child, path)}`);
++  }
++  return output;
++}
++
++function copyEnvironment(source) {
++  const env = {};
++  for (const [key, value] of Object.entries(source || {})) {
++    if (value !== undefined) env[key] = value;
++  }
++  return env;
++}
++
++function pathEnvironmentKey(env, platform = process.platform) {
++  if (platform !== 'win32') return 'PATH';
++  const matchingKeys = Object.keys(env).filter((key) => key.toLowerCase() === 'path');
++  return matchingKeys.includes('Path') ? 'Path' : matchingKeys.at(-1) ?? 'PATH';
++}
++
++function prependPathDirectories(env, pathDirs, platform = process.platform) {
++  if (!Array.isArray(pathDirs) || pathDirs.length === 0) return;
++  const pathKey = pathEnvironmentKey(env, platform);
++  if (platform === 'win32') {
++    for (const key of Object.keys(env)) {
++      if (key.toLowerCase() === 'path' && key !== pathKey) delete env[key];
++    }
++  }
++  const existing = `${env[pathKey] ?? ''}`
++    .split(pathDelimiter)
++    .filter((entry) => entry && !pathDirs.includes(entry));
++  env[pathKey] = [...pathDirs, ...existing].join(pathDelimiter);
++}
++
++export function getCodexForkRuntime(thread) {
++  const exec = thread?._exec;
++  const options = thread?._options;
++  if (!exec || typeof exec.executablePath !== 'string' || !exec.executablePath) return null;
++  if (!Array.isArray(exec.pathDirs)) return null;
++  if (exec.configOverrides !== undefined && !isPlainObject(exec.configOverrides)) return null;
++  if (exec.envOverride !== undefined && !isPlainObject(exec.envOverride)) return null;
++
++  return {
++    executablePath: exec.executablePath,
++    pathDirs: [...exec.pathDirs],
++    envOverride: exec.envOverride === undefined
++      ? undefined
++      : { ...exec.envOverride },
++    configOverrides: exec.configOverrides,
++    baseUrl: options?.baseUrl,
++    apiKey: options?.apiKey,
++  };
++}
++
++export function buildCodexAppServerCommand(runtime) {
++  if (!runtime || typeof runtime.executablePath !== 'string' || !runtime.executablePath) {
++    throw new CodexAppServerError('Codex App Server runtime is unavailable', {
++      category: 'runtime',
++    });
++  }
++
++  const args = ['app-server', '--stdio'];
++  for (const override of flattenConfigOverrides(runtime.configOverrides || {})) {
++    args.push('--config', override);
++  }
++  if (runtime.baseUrl) {
++    args.push('--config', `openai_base_url=${toTomlValue(runtime.baseUrl, 'openai_base_url')}`);
++  }
++
++  const env = copyEnvironment(runtime.envOverride ?? process.env);
++  if (!env.CODEX_INTERNAL_ORIGINATOR_OVERRIDE) {
++    env.CODEX_INTERNAL_ORIGINATOR_OVERRIDE = TYPESCRIPT_SDK_ORIGINATOR;
++  }
++  if (runtime.apiKey) env.CODEX_API_KEY = runtime.apiKey;
++  prependPathDirectories(env, runtime.pathDirs);
++
++  return {
++    executablePath: runtime.executablePath,
++    args,
++    env,
++  };
++}
++
++function safeRpcCode(value) {
++  if (typeof value === 'number' && Number.isFinite(value)) return value;
++  if (typeof value === 'string' && /^[A-Z0-9_-]{1,64}$/i.test(value)) return value;
++  return undefined;
++}
++
++function containsMissingThreadSignal(value, seen = new Set(), depth = 0) {
++  if (typeof value === 'string') {
++    return /not[\s_-]*found|does not exist|unknown[\s_-]+thread/i.test(value);
++  }
++  if (!value || typeof value !== 'object' || depth > 4 || seen.has(value)) return false;
++  seen.add(value);
++  return Object.values(value)
++    .some((child) => containsMissingThreadSignal(child, seen, depth + 1));
++}
++
++function rpcErrorFor(method, rawError) {
++  const rpcCode = safeRpcCode(rawError?.code);
++  return new CodexAppServerError(`Codex App Server ${method} request failed`, {
++    category: 'rpc_error',
++    ...(rpcCode === undefined ? {} : { rpcCode }),
++    missingThread: containsMissingThreadSignal(rawError),
++  });
++}
++
++function protocolError(category = 'protocol') {
++  return new CodexAppServerError('Codex App Server protocol failed', { category });
++}
++
++function processError(method, code, signal) {
++  return new CodexAppServerError(`Codex App Server ${method} process failed`, {
++    category: 'process_exit',
++    ...(Number.isInteger(code) ? { exitCode: code } : {}),
++    ...(typeof signal === 'string' && /^[A-Z0-9]+$/.test(signal) ? { signal } : {}),
++  });
++}
++
++function abortReason(signal) {
++  if (signal?.reason instanceof Error) return signal.reason;
++  const error = new Error('Codex App Server request aborted');
++  error.name = 'AbortError';
++  return error;
++}
++
++function createCodexAppServerConnection({ runtime, signal, spawnImpl }) {
++  if (signal?.aborted) throw abortReason(signal);
++  const command = buildCodexAppServerCommand(runtime);
++  const detached = process.platform !== 'win32';
++  let child;
++  try {
++    child = spawnImpl(command.executablePath, command.args, {
++      env: command.env,
++      stdio: ['pipe', 'pipe', 'pipe'],
++      detached,
++    });
++  } catch {
++    throw new CodexAppServerError('Codex App Server process failed', {
++      category: 'spawn',
++    });
++  }
++
++  if (!child?.stdin || !child?.stdout) {
++    try {
++      child?.kill?.('SIGTERM');
++    } catch {
++      // The sanitized runtime error below is authoritative.
++    }
++    throw new CodexAppServerError('Codex App Server stdio is unavailable', {
++      category: 'spawn',
++    });
++  }
++
++  const lines = createInterface({ input: child.stdout, crlfDelay: Infinity });
++  child.stderr?.on?.('data', () => {
++    // Drain diagnostics without retaining potentially sensitive upstream content.
++  });
++  const completedIds = new Set();
++  let pending = null;
++  let fatalError = null;
++  let closed = child.exitCode !== null || child.signalCode !== null;
++  let resolveClosed;
++  const closedPromise = new Promise((resolve) => {
++    resolveClosed = resolve;
++  });
++  if (closed) resolveClosed();
++
++  const terminate = (terminationSignal = 'SIGTERM') => {
++    if (closed) return;
++    let groupSignalled = false;
++    if (detached && Number.isInteger(child.pid) && child.pid > 0) {
++      try {
++        process.kill(-child.pid, terminationSignal);
++        groupSignalled = true;
++      } catch {
++        groupSignalled = false;
++      }
++    }
++    if (!groupSignalled || !child.killed) {
++      try {
++        child.kill(terminationSignal);
++      } catch {
++        // The close waiter and later SIGKILL remain authoritative.
++      }
++    }
++  };
++
++  const fail = (error) => {
++    if (!fatalError) fatalError = error;
++    if (pending) {
++      const waiter = pending;
++      pending = null;
++      waiter.reject(fatalError);
++    }
++    terminate();
++  };
++
++  lines.on('line', (line) => {
++    if (!line) return;
++    let message;
++    try {
++      message = JSON.parse(line);
++    } catch {
++      fail(protocolError('malformed_json'));
++      return;
++    }
++    if (!isPlainObject(message)) {
++      fail(protocolError('malformed_response'));
++      return;
++    }
++    if (!Object.hasOwn(message, 'id')) return;
++    if (completedIds.has(message.id)) {
++      fail(protocolError('duplicate_response'));
++      return;
++    }
++    if (!pending || message.id !== pending.id) {
++      fail(protocolError('unexpected_response'));
++      return;
++    }
++    const hasResult = Object.hasOwn(message, 'result');
++    const hasError = Object.hasOwn(message, 'error');
++    if (hasResult === hasError) {
++      fail(protocolError('malformed_response'));
++      return;
++    }
++
++    const waiter = pending;
++    pending = null;
++    completedIds.add(message.id);
++    const terminalError = hasError ? rpcErrorFor(waiter.method, message.error) : null;
++    queueMicrotask(() => {
++      if (fatalError) waiter.reject(fatalError);
++      else if (terminalError) waiter.reject(terminalError);
++      else waiter.resolve(message.result);
++    });
++  });
++
++  child.once('error', () => {
++    fail(new CodexAppServerError('Codex App Server process failed', {
++      category: 'spawn',
++    }));
++  });
++  child.once('close', (code, closeSignal) => {
++    closed = true;
++    resolveClosed();
++    if (pending) fail(processError(pending.method, code, closeSignal));
++  });
++  child.stdout.on?.('error', () => fail(protocolError('stdout')));
++  child.stderr?.on?.('error', () => fail(protocolError('stderr')));
++  child.stdin.on?.('error', () => fail(protocolError('stdin')));
++
++  const onAbort = () => fail(abortReason(signal));
++  signal?.addEventListener('abort', onAbort, { once: true });
++
++  const send = (message) => {
++    if (fatalError) throw fatalError;
++    try {
++      child.stdin.write(`${JSON.stringify(message)}\n`);
++    } catch {
++      const error = protocolError('stdin');
++      fail(error);
++      throw error;
++    }
++  };
++
++  return {
++    request(id, method, params) {
++      if (fatalError) return Promise.reject(fatalError);
++      if (closed) return Promise.reject(processError(method, child.exitCode, child.signalCode));
++      if (pending || completedIds.has(id)) {
++        return Promise.reject(protocolError('request_state'));
++      }
++      const response = new Promise((resolve, reject) => {
++        pending = { id, method, resolve, reject };
++      });
++      try {
++        send({ method, id, params });
++      } catch {
++        // send() already rejected the pending request through fail().
++      }
++      return response;
++    },
++    notify(method, params) {
++      send({ method, params });
++    },
++    assertHealthy() {
++      if (fatalError) throw fatalError;
++    },
++    async close() {
++      signal?.removeEventListener('abort', onAbort);
++      try {
++        child.stdin.end();
++      } catch {
++        // Process termination remains authoritative.
++      }
++      terminate('SIGTERM');
++      if (!closed) {
++        const killTimer = setTimeout(() => terminate('SIGKILL'), APP_SERVER_KILL_GRACE_MS);
++        killTimer.unref?.();
++        await closedPromise;
++        clearTimeout(killTimer);
++      }
++      lines.close();
++    },
++  };
++}
++
++export async function requestCodexAppServer({
++  runtime,
++  method,
++  params,
++  signal,
++  spawnImpl = defaultSpawn,
++}) {
++  let connection;
++  let result;
++  let requestError = null;
++  try {
++    connection = createCodexAppServerConnection({
++      runtime,
++      signal,
++      spawnImpl,
++    });
++    await connection.request(0, 'initialize', {
++      clientInfo: CODEX_APP_SERVER_CLIENT_INFO,
++    });
++    connection.notify('initialized', {});
++    result = await connection.request(1, method, params);
++  } catch (error) {
++    requestError = error;
++  } finally {
++    await connection?.close();
++  }
++  if (requestError) throw requestError;
++  connection.assertHealthy();
++  return result;
++}
++
++export async function readCodexStableBoundary({
++  runtime,
++  sourceThreadId,
++  signal,
++  requestImpl = requestCodexAppServer,
++}) {
++  if (!sourceThreadId) return { sourceThreadId: null, lastTurnId: null };
++  const result = await requestImpl({
++    runtime,
++    method: 'thread/read',
++    params: { threadId: sourceThreadId, includeTurns: true },
++    signal,
++  });
++  if (result?.thread?.id !== sourceThreadId) {
++    throw new CodexAppServerError('Codex thread/read returned a different thread', {
++      category: 'protocol',
++    });
++  }
++  const turns = Array.isArray(result.thread.turns) ? result.thread.turns : [];
++  let lastCompletedIndex = -1;
++  for (let index = 0; index < turns.length; index += 1) {
++    const turn = turns[index];
++    if (turn?.status === 'completed' && typeof turn.id === 'string' && turn.id) {
++      lastCompletedIndex = index;
++    }
++  }
++  const lastTurnId = lastCompletedIndex >= 0 ? turns[lastCompletedIndex].id : null;
++  return {
++    sourceThreadId,
++    lastTurnId,
++    ...(lastTurnId && lastCompletedIndex < turns.length - 1 ? { requiresFork: true } : {}),
++  };
++}
++
++export function buildCodexRetryInput(runInput, hasToolActivity) {
++  if (!hasToolActivity) return runInput;
++  if (typeof runInput === 'string') {
++    return `${CODEX_RETRY_RECOVERY_PREFIX}\n\n${runInput}`;
++  }
++  if (!Array.isArray(runInput)) return runInput;
++
++  const copied = runInput.map((item) => ({ ...item }));
++  const textIndex = copied.findIndex((item) => item?.type === 'text');
++  if (textIndex < 0) {
++    return [{ type: 'text', text: CODEX_RETRY_RECOVERY_PREFIX }, ...copied];
++  }
++  copied[textIndex] = {
++    ...copied[textIndex],
++    text: `${CODEX_RETRY_RECOVERY_PREFIX}\n\n${copied[textIndex].text ?? ''}`,
++  };
++  return copied;
++}
++
++function requireDistinctChildId(childThreadId, sourceThreadId) {
++  if (
++    typeof childThreadId !== 'string'
++    || !childThreadId
++    || childThreadId === sourceThreadId
++  ) {
++    throw new CodexAppServerError('Codex thread/fork returned an invalid child thread', {
++      category: 'protocol',
++    });
++  }
++  return childThreadId;
++}
++
++function isMissingThreadError(error) {
++  return error instanceof CodexAppServerError && error.details?.missingThread === true;
++}
++
++export async function deleteCodexRetryThread({
++  runtime,
++  threadId,
++  signal,
++  requestImpl = requestCodexAppServer,
++}) {
++  if (typeof threadId !== 'string' || !threadId) {
++    throw new CodexAppServerError('Codex retry child thread is invalid', {
++      category: 'protocol',
++    });
++  }
++  try {
++    await requestImpl({
++      runtime,
++      method: 'thread/delete',
++      params: { threadId },
++      signal,
++    });
++  } catch (error) {
++    if (!isMissingThreadError(error)) throw error;
++  }
++}
++
++export async function createCodexRetryAttempt({
++  runtime,
++  codex,
++  threadOptions,
++  stableBoundary,
++  runInput,
++  hasToolActivity,
++  signal,
++  cleanupSignal,
++  requestImpl = requestCodexAppServer,
++}) {
++  const sourceThreadId = stableBoundary?.sourceThreadId ?? null;
++  const lastTurnId = stableBoundary?.lastTurnId ?? null;
++  if (sourceThreadId !== null && (typeof sourceThreadId !== 'string' || !sourceThreadId)) {
++    throw new CodexAppServerError('Codex retry source thread is invalid', {
++      category: 'protocol',
++    });
++  }
++  if (lastTurnId !== null && (typeof lastTurnId !== 'string' || !lastTurnId)) {
++    throw new CodexAppServerError('Codex retry boundary turn is invalid', {
++      category: 'protocol',
++    });
++  }
++  if (lastTurnId && !sourceThreadId) {
++    throw new CodexAppServerError('Codex retry boundary has no source thread', {
++      category: 'protocol',
++    });
++  }
++
++  let childThreadId = null;
++  if (lastTurnId) {
++    const result = await requestImpl({
++      runtime,
++      method: 'thread/fork',
++      params: { threadId: sourceThreadId, lastTurnId },
++      signal,
++    });
++    childThreadId = requireDistinctChildId(result?.thread?.id, sourceThreadId);
++  }
++
++  const retryInput = buildCodexRetryInput(runInput, hasToolActivity);
++  let eventsConsumed = false;
++  const events = {
++    async *[Symbol.asyncIterator]() {
++      if (eventsConsumed) {
++        throw new CodexAppServerError('Codex retry event stream was already consumed', {
++          category: 'protocol',
++        });
++      }
++      eventsConsumed = true;
++      const retryThread = childThreadId
++        ? codex.resumeThread(childThreadId, threadOptions)
++        : codex.startThread(threadOptions);
++      const streamed = await retryThread.runStreamed(retryInput, { signal });
++      if (!streamed?.events || typeof streamed.events[Symbol.asyncIterator] !== 'function') {
++        throw new CodexAppServerError('Codex retry SDK returned no event stream', {
++          category: 'protocol',
++        });
++      }
++      for await (const event of streamed.events) {
++        if (event?.type === 'thread.started') {
++          const eventThreadId = event.thread_id;
++          if (typeof eventThreadId !== 'string' || !eventThreadId) {
++            throw new CodexAppServerError('Codex retry SDK returned an invalid thread', {
++              category: 'protocol',
++            });
++          }
++          if (childThreadId && eventThreadId !== childThreadId) {
++            throw new CodexAppServerError('Codex retry SDK started a different thread', {
++              category: 'protocol',
++            });
++          }
++          childThreadId = eventThreadId;
++        }
++        yield event;
++      }
++    },
++  };
++
++  let cleanupComplete = false;
++  let cleanupInFlight = null;
++  const cleanup = (signalOverride = cleanupSignal) => {
++    if (cleanupComplete || !childThreadId) return Promise.resolve();
++    if (cleanupInFlight) return cleanupInFlight;
++    cleanupInFlight = deleteCodexRetryThread({
++      runtime,
++      threadId: childThreadId,
++      signal: signalOverride,
++      requestImpl,
++    }).then(() => {
++      cleanupComplete = true;
++    }).finally(() => {
++      cleanupInFlight = null;
++    });
++    return cleanupInFlight;
++  };
++
++  return {
++    events,
++    getThreadId: () => childThreadId,
++    cleanup,
++  };
++}
+diff --git a/ai-bridge/services/codex/codex-fork.test.js b/ai-bridge/services/codex/codex-fork.test.js
+new file mode 100644
+index 0000000000000000000000000000000000000000..1a3e3149077f01acef99b4b2c72fde94012b8f2f
+--- /dev/null
++++ b/ai-bridge/services/codex/codex-fork.test.js
+@@ -0,0 +1,677 @@
++import test from 'node:test';
++import assert from 'node:assert/strict';
++import { EventEmitter } from 'node:events';
++import { PassThrough } from 'node:stream';
++import {
++  CODEX_RETRY_RECOVERY_PREFIX,
++  CodexAppServerError,
++  buildCodexAppServerCommand,
++  buildCodexRetryInput,
++  createCodexRetryAttempt,
++  deleteCodexRetryThread,
++  getCodexForkRuntime,
++  readCodexStableBoundary,
++  requestCodexAppServer,
++} from './codex-fork.js';
++
++function createAppServerHarness(handleMessage, {
++  autoCloseOnEnd = true,
++  handleEnd,
++} = {}) {
++  const spawnCalls = [];
++  const sent = [];
++  const children = [];
++
++  const spawnImpl = (command, args, options) => {
++    const child = new EventEmitter();
++    child.pid = 900_000 + children.length;
++    child.exitCode = null;
++    child.signalCode = null;
++    child.killed = false;
++    child.stdout = new PassThrough();
++    child.stderr = new PassThrough();
++    let inputBuffer = '';
++    let closed = false;
++
++    const close = (code = 0, signal = null) => {
++      if (closed) return;
++      closed = true;
++      child.exitCode = code;
++      child.signalCode = signal;
++      queueMicrotask(() => child.emit('close', code, signal));
++    };
++    const send = (message) => {
++      child.stdout.write(`${JSON.stringify(message)}\n`);
++    };
++    const sendRaw = (line) => {
++      child.stdout.write(`${line}\n`);
++    };
++
++    child.stdin = {
++      destroyed: false,
++      writableEnded: false,
++      write(chunk) {
++        inputBuffer += chunk.toString();
++        while (inputBuffer.includes('\n')) {
++          const newline = inputBuffer.indexOf('\n');
++          const line = inputBuffer.slice(0, newline);
++          inputBuffer = inputBuffer.slice(newline + 1);
++          if (!line) continue;
++          const message = JSON.parse(line);
++          sent.push(message);
++          handleMessage?.({ message, send, sendRaw, close, child, sent });
++        }
++        return true;
++      },
++      end() {
++        this.writableEnded = true;
++        handleEnd?.({ send, sendRaw, close, child, sent });
++        if (autoCloseOnEnd) close(0, null);
++      },
++      destroy() {
++        this.destroyed = true;
++      },
++    };
++    child.kill = (signal = 'SIGTERM') => {
++      child.killed = true;
++      close(null, signal);
++      return true;
++    };
++
++    spawnCalls.push({ command, args, options });
++    children.push(child);
++    return child;
++  };
++
++  return { spawnImpl, spawnCalls, sent, children };
++}
++
++function successfulHarness(resultForRequest = {}) {
++  return createAppServerHarness(({ message, send }) => {
++    if (message.method === 'initialize') send({ id: message.id, result: {} });
++    else if (Object.hasOwn(message, 'id')) send({ id: message.id, result: resultForRequest });
++  });
++}
++
++async function collectEvents(events) {
++  const collected = [];
++  for await (const event of events) collected.push(event);
++  return collected;
++}
++
++const baseRuntime = {
++  executablePath: '/opt/codex/bin/codex',
++  pathDirs: ['/opt/codex/path', '/opt/codex/tools'],
++  envOverride: { PATH: '/usr/bin', KEEP_ME: 'yes' },
++  configOverrides: {
++    model_supports_reasoning_summaries: true,
++    features: { fast_mode: true },
++  },
++  baseUrl: 'https://gateway.example/v1',
++  apiKey: 'environment-only-api-key',
++};
++
++test('extracts the private runtime shape used by Codex SDK 0.148.0', () => {
++  const thread = {
++    _exec: {
++      executablePath: baseRuntime.executablePath,
++      pathDirs: baseRuntime.pathDirs,
++      envOverride: baseRuntime.envOverride,
++      configOverrides: baseRuntime.configOverrides,
++    },
++    _options: {
++      baseUrl: baseRuntime.baseUrl,
++      apiKey: baseRuntime.apiKey,
++    },
++  };
++
++  assert.deepEqual(getCodexForkRuntime(thread), baseRuntime);
++  assert.equal(getCodexForkRuntime(null), null);
++  assert.equal(getCodexForkRuntime({ _exec: {} }), null);
++  assert.equal(getCodexForkRuntime({
++    _exec: { executablePath: '', pathDirs: [] },
++    _options: {},
++  }), null);
++});
++
++test('builds the App Server command with SDK config and keeps the API key out of argv', () => {
++  const command = buildCodexAppServerCommand(baseRuntime);
++
++  assert.equal(command.executablePath, baseRuntime.executablePath);
++  assert.deepEqual(command.args, [
++    'app-server',
++    '--stdio',
++    '--config',
++    'model_supports_reasoning_summaries=true',
++    '--config',
++    'features.fast_mode=true',
++    '--config',
++    'openai_base_url="https://gateway.example/v1"',
++  ]);
++  assert.equal(command.args.join(' ').includes(baseRuntime.apiKey), false);
++  assert.equal(command.env.CODEX_API_KEY, baseRuntime.apiKey);
++  assert.equal(command.env.KEEP_ME, 'yes');
++  assert.equal(
++    command.env.PATH,
++    ['/opt/codex/path', '/opt/codex/tools', '/usr/bin'].join(':'),
++  );
++  assert.equal(command.env.CODEX_INTERNAL_ORIGINATOR_OVERRIDE, 'codex_sdk_ts');
++});
++
++test('initializes App Server before notification and one protocol request', async () => {
++  const harness = successfulHarness({ thread: { id: 'source-thread', turns: [] } });
++
++  const result = await requestCodexAppServer({
++    runtime: baseRuntime,
++    method: 'thread/read',
++    params: { threadId: 'source-thread', includeTurns: true },
++    spawnImpl: harness.spawnImpl,
++  });
++
++  assert.equal(result.thread.id, 'source-thread');
++  assert.deepEqual(harness.sent, [
++    {
++      method: 'initialize',
++      id: 0,
++      params: {
++        clientInfo: {
++          name: 'ccgui_retry_bridge',
++          title: 'CC GUI Retry Bridge',
++          version: '0.5.2-retry.6',
++        },
++      },
++    },
++    { method: 'initialized', params: {} },
++    {
++      method: 'thread/read',
++      id: 1,
++      params: { threadId: 'source-thread', includeTurns: true },
++    },
++  ]);
++  for (const message of harness.sent) assert.equal(Object.hasOwn(message, 'jsonrpc'), false);
++  assert.equal(harness.spawnCalls.length, 1);
++  assert.equal(harness.spawnCalls[0].command, baseRuntime.executablePath);
++  assert.deepEqual(harness.spawnCalls[0].args, buildCodexAppServerCommand(baseRuntime).args);
++  assert.deepEqual(harness.spawnCalls[0].options.stdio, ['pipe', 'pipe', 'pipe']);
++  assert.equal(harness.spawnCalls[0].options.env.CODEX_API_KEY, baseRuntime.apiKey);
++  assert.equal(
++    harness.spawnCalls[0].options.detached,
++    process.platform !== 'win32',
++  );
++  assert.notEqual(harness.children[0].exitCode, null);
++});
++
++test('ignores notifications while waiting for a matching response', async () => {
++  const harness = createAppServerHarness(({ message, send }) => {
++    send({ method: 'server/notice', params: { safe: true } });
++    send({ id: message.id, result: message.id === 0 ? {} : { ok: true } });
++  });
++
++  const result = await requestCodexAppServer({
++    runtime: baseRuntime,
++    method: 'thread/read',
++    params: { threadId: 'source-thread', includeTurns: false },
++    spawnImpl: harness.spawnImpl,
++  });
++
++  assert.deepEqual(result, { ok: true });
++});
++
++test('drains App Server stderr so a noisy process cannot block RPC progress', async () => {
++  const harness = successfulHarness({ ok: true });
++
++  const result = await requestCodexAppServer({
++    runtime: baseRuntime,
++    method: 'thread/read',
++    params: { threadId: 'source-thread', includeTurns: false },
++    spawnImpl: harness.spawnImpl,
++  });
++
++  assert.deepEqual(result, { ok: true });
++  assert.equal(harness.children[0].stderr.listenerCount('data') > 0, true);
++});
++
++test('selects the last completed turn as an immutable fork boundary', async () => {
++  const calls = [];
++  const boundary = await readCodexStableBoundary({
++    runtime: baseRuntime,
++    sourceThreadId: 'source-thread',
++    requestImpl: async (request) => {
++      calls.push(request);
++      return {
++        thread: {
++          id: 'source-thread',
++          turns: [
++            { id: 'turn-1', status: 'completed' },
++            { id: 'turn-2', status: 'failed' },
++            { id: 'turn-3', status: 'completed' },
++            { id: 'turn-4', status: 'interrupted' },
++          ],
++        },
++      };
++    },
++  });
++
++  assert.deepEqual(boundary, {
++    sourceThreadId: 'source-thread',
++    lastTurnId: 'turn-3',
++    requiresFork: true,
++  });
++  assert.equal(calls.length, 1);
++  assert.equal(calls[0].method, 'thread/read');
++  assert.deepEqual(calls[0].params, {
++    threadId: 'source-thread',
++    includeTurns: true,
++  });
++});
++
++test('uses a fresh-thread boundary when no completed turn exists', async () => {
++  const noSource = await readCodexStableBoundary({
++    runtime: baseRuntime,
++    sourceThreadId: null,
++    requestImpl: async () => assert.fail('a missing source must not be read'),
++  });
++  assert.deepEqual(noSource, { sourceThreadId: null, lastTurnId: null });
++
++  const emptySource = await readCodexStableBoundary({
++    runtime: baseRuntime,
++    sourceThreadId: 'empty-thread',
++    requestImpl: async () => ({
++      thread: {
++        id: 'empty-thread',
++        turns: [{ id: 'failed-turn', status: 'failed' }],
++      },
++    }),
++  });
++  assert.deepEqual(emptySource, {
++    sourceThreadId: 'empty-thread',
++    lastTurnId: null,
++  });
++});
++
++test('rejects a thread/read response for a different source thread', async () => {
++  await assert.rejects(
++    readCodexStableBoundary({
++      runtime: baseRuntime,
++      sourceThreadId: 'source-thread',
++      requestImpl: async () => ({ thread: { id: 'other-thread', turns: [] } }),
++    }),
++    (error) => error instanceof CodexAppServerError && error.code === 'SERVER_ERROR',
++  );
++});
++
++test('forks through the fixed turn and lazily resumes the returned child', async () => {
++  const order = [];
++  const requestCalls = [];
++  const runInput = [{ type: 'text', text: 'continue' }];
++  const codex = {
++    resumeThread(threadId, options) {
++      order.push(`resume:${threadId}`);
++      assert.deepEqual(options, { model: 'gpt-test' });
++      return {
++        async runStreamed(input, turnOptions) {
++          order.push('run');
++          assert.equal(input, runInput);
++          assert.ok(turnOptions.signal);
++          return {
++            events: {
++              async *[Symbol.asyncIterator]() {
++                yield { type: 'thread.started', thread_id: 'child-thread' };
++                yield { type: 'turn.started' };
++              },
++            },
++          };
++        },
++      };
++    },
++  };
++
++  const attempt = await createCodexRetryAttempt({
++    runtime: baseRuntime,
++    codex,
++    threadOptions: { model: 'gpt-test' },
++    stableBoundary: {
++      sourceThreadId: 'source-thread',
++      lastTurnId: 'stable-turn',
++    },
++    runInput,
++    hasToolActivity: false,
++    signal: new AbortController().signal,
++    requestImpl: async (request) => {
++      requestCalls.push(request);
++      if (request.method === 'thread/fork') {
++        order.push('fork');
++        return { thread: { id: 'child-thread' } };
++      }
++      assert.equal(request.method, 'thread/delete');
++      order.push('delete');
++      return {};
++    },
++  });
++
++  assert.deepEqual(order, ['fork']);
++  assert.equal(attempt.getThreadId(), 'child-thread');
++  assert.deepEqual(requestCalls[0].params, {
++    threadId: 'source-thread',
++    lastTurnId: 'stable-turn',
++  });
++  assert.deepEqual(await collectEvents(attempt.events), [
++    { type: 'thread.started', thread_id: 'child-thread' },
++    { type: 'turn.started' },
++  ]);
++  assert.deepEqual(order, ['fork', 'resume:child-thread', 'run']);
++  await attempt.cleanup();
++  await attempt.cleanup();
++  assert.deepEqual(order, ['fork', 'resume:child-thread', 'run', 'delete']);
++});
++
++test('keeps the child cleanup handle when local SDK startup fails', async () => {
++  let deleteCalls = 0;
++  const attempt = await createCodexRetryAttempt({
++    runtime: baseRuntime,
++    codex: {
++      resumeThread() {
++        return {
++          async runStreamed() {
++            throw new Error('local SDK startup failed');
++          },
++        };
++      },
++    },
++    threadOptions: {},
++    stableBoundary: {
++      sourceThreadId: 'source-thread',
++      lastTurnId: 'stable-turn',
++    },
++    runInput: 'retry input',
++    hasToolActivity: false,
++    requestImpl: async ({ method }) => {
++      if (method === 'thread/fork') return { thread: { id: 'child-thread' } };
++      deleteCalls += 1;
++      return {};
++    },
++  });
++
++  await assert.rejects(collectEvents(attempt.events), /local SDK startup failed/);
++  await attempt.cleanup();
++  assert.equal(deleteCalls, 1);
++});
++
++test('rejects empty, equal, and mismatched fork child IDs without losing the source ID', async () => {
++  for (const childId of [null, '', 'source-thread']) {
++    await assert.rejects(
++      createCodexRetryAttempt({
++        runtime: baseRuntime,
++        codex: {},
++        threadOptions: {},
++        stableBoundary: {
++          sourceThreadId: 'source-thread',
++          lastTurnId: 'stable-turn',
++        },
++        runInput: 'retry input',
++        hasToolActivity: false,
++        requestImpl: async () => ({ thread: { id: childId } }),
++      }),
++      (error) => error instanceof CodexAppServerError,
++    );
++  }
++
++  let deletedId = null;
++  const attempt = await createCodexRetryAttempt({
++    runtime: baseRuntime,
++    codex: {
++      resumeThread() {
++        return {
++          async runStreamed() {
++            return {
++              events: {
++                async *[Symbol.asyncIterator]() {
++                  yield { type: 'thread.started', thread_id: 'wrong-child' };
++                },
++              },
++            };
++          },
++        };
++      },
++    },
++    threadOptions: {},
++    stableBoundary: {
++      sourceThreadId: 'source-thread',
++      lastTurnId: 'stable-turn',
++    },
++    runInput: 'retry input',
++    hasToolActivity: false,
++    requestImpl: async ({ method, params }) => {
++      if (method === 'thread/fork') return { thread: { id: 'child-thread' } };
++      deletedId = params.threadId;
++      return {};
++    },
++  });
++  await assert.rejects(collectEvents(attempt.events), /different thread/);
++  await attempt.cleanup();
++  assert.equal(deletedId, 'child-thread');
++});
++
++test('starts a fresh SDK thread lazily and preserves image input', async () => {
++  const order = [];
++  const image = { type: 'local_image', path: '/tmp/input.png' };
++  let receivedInput = null;
++  const attempt = await createCodexRetryAttempt({
++    runtime: baseRuntime,
++    codex: {
++      startThread(options) {
++        order.push('start');
++        assert.deepEqual(options, { sandboxMode: 'workspace-write' });
++        return {
++          async runStreamed(input) {
++            order.push('run');
++            receivedInput = input;
++            return {
++              events: {
++                async *[Symbol.asyncIterator]() {
++                  yield { type: 'thread.started', thread_id: 'fresh-thread' };
++                  yield { type: 'turn.started' };
++                },
++              },
++            };
++          },
++        };
++      },
++    },
++    threadOptions: { sandboxMode: 'workspace-write' },
++    stableBoundary: { sourceThreadId: null, lastTurnId: null },
++    runInput: [{ type: 'text', text: 'continue' }, image],
++    hasToolActivity: true,
++    requestImpl: async ({ method, params }) => {
++      assert.equal(method, 'thread/delete');
++      assert.equal(params.threadId, 'fresh-thread');
++      order.push('delete');
++      return {};
++    },
++  });
++
++  assert.deepEqual(order, []);
++  assert.equal(attempt.getThreadId(), null);
++  await collectEvents(attempt.events);
++  assert.deepEqual(order, ['start', 'run']);
++  assert.equal(attempt.getThreadId(), 'fresh-thread');
++  assert.equal(receivedInput[0].type, 'text');
++  assert.equal(receivedInput[0].text.startsWith(CODEX_RETRY_RECOVERY_PREFIX), true);
++  assert.match(receivedInput[0].text, /continue$/);
++  assert.deepEqual(receivedInput[1], image);
++  await attempt.cleanup();
++  assert.deepEqual(order, ['start', 'run', 'delete']);
++});
++
++test('adds recovery text only after tool activity and never drops images', () => {
++  assert.equal(buildCodexRetryInput('plain input', false), 'plain input');
++  assert.equal(
++    buildCodexRetryInput('plain input', true),
++    `${CODEX_RETRY_RECOVERY_PREFIX}\n\nplain input`,
++  );
++
++  const imageOnly = [{ type: 'local_image', path: '/tmp/image.png' }];
++  assert.deepEqual(buildCodexRetryInput(imageOnly, true), [
++    { type: 'text', text: CODEX_RETRY_RECOVERY_PREFIX },
++    imageOnly[0],
++  ]);
++  assert.deepEqual(buildCodexRetryInput(imageOnly, false), imageOnly);
++});
++
++test('retries a failed child deletion and becomes idempotent only after success', async () => {
++  let deleteCalls = 0;
++  const attempt = await createCodexRetryAttempt({
++    runtime: baseRuntime,
++    codex: { resumeThread: () => assert.fail('events are not consumed in this test') },
++    threadOptions: {},
++    stableBoundary: {
++      sourceThreadId: 'source-thread',
++      lastTurnId: 'stable-turn',
++    },
++    runInput: 'retry input',
++    hasToolActivity: false,
++    requestImpl: async ({ method }) => {
++      if (method === 'thread/fork') return { thread: { id: 'child-thread' } };
++      deleteCalls += 1;
++      if (deleteCalls === 1) throw new CodexAppServerError('delete failed');
++      return {};
++    },
++  });
++
++  await assert.rejects(attempt.cleanup(), /delete failed/);
++  await attempt.cleanup();
++  await attempt.cleanup();
++  assert.equal(deleteCalls, 2);
++});
++
++test('treats thread/delete not-found as successful idempotent cleanup', async () => {
++  let calls = 0;
++  await deleteCodexRetryThread({
++    runtime: baseRuntime,
++    threadId: 'already-deleted',
++    requestImpl: async () => {
++      calls += 1;
++      throw new CodexAppServerError('Codex App Server thread/delete failed', {
++        category: 'rpc_error',
++        missingThread: true,
++      });
++    },
++  });
++  assert.equal(calls, 1);
++});
++
++test('rejects malformed JSON, wrong response IDs, duplicate responses, and early exit', async () => {
++  const cases = [
++    createAppServerHarness(({ sendRaw }) => sendRaw('{not-json')),
++    createAppServerHarness(({ send }) => send({ id: 99, result: {} })),
++    createAppServerHarness(({ message, send }) => {
++      send({ id: message.id, result: {} });
++      send({ id: message.id, result: {} });
++    }),
++    createAppServerHarness(({ close }) => close(17, null), { autoCloseOnEnd: false }),
++  ];
++
++  for (const harness of cases) {
++    await assert.rejects(
++      requestCodexAppServer({
++        runtime: baseRuntime,
++        method: 'thread/read',
++        params: { threadId: 'source-thread', includeTurns: true },
++        spawnImpl: harness.spawnImpl,
++      }),
++      (error) => error instanceof CodexAppServerError && error.code === 'SERVER_ERROR',
++    );
++  }
++});
++
++test('rejects a duplicate terminal response emitted while the process closes', async () => {
++  const harness = createAppServerHarness(({ message, send }) => {
++    send({ id: message.id, result: {} });
++  }, {
++    handleEnd: ({ send }) => send({ id: 1, result: {} }),
++  });
++
++  await assert.rejects(
++    requestCodexAppServer({
++      runtime: baseRuntime,
++      method: 'thread/read',
++      params: { threadId: 'source-thread', includeTurns: true },
++      spawnImpl: harness.spawnImpl,
++    }),
++    (error) => (
++      error instanceof CodexAppServerError
++      && error.details.category === 'duplicate_response'
++    ),
++  );
++});
++
++test('aborts a silent App Server request and waits for process close', async () => {
++  const controller = new AbortController();
++  const abortReason = Object.assign(new Error('attempt timed out'), {
++    code: 'CODEX_STREAM_INACTIVITY_TIMEOUT',
++  });
++  const harness = createAppServerHarness(() => {}, { autoCloseOnEnd: false });
++
++  const pending = requestCodexAppServer({
++    runtime: baseRuntime,
++    method: 'thread/read',
++    params: { threadId: 'source-thread', includeTurns: true },
++    signal: controller.signal,
++    spawnImpl: harness.spawnImpl,
++  });
++  controller.abort(abortReason);
++
++  await assert.rejects(pending, (error) => error === abortReason);
++  assert.equal(harness.children[0].killed, true);
++  assert.notEqual(harness.children[0].signalCode, null);
++});
++
++test('sanitizes RPC errors and recognizes missing threads without exposing raw data', async () => {
++  const secret = 'Bearer upstream-secret';
++  const harness = createAppServerHarness(({ message, send }) => {
++    if (message.method === 'initialize') {
++      send({ id: message.id, result: {} });
++      return;
++    }
++    send({
++      id: message.id,
++      error: {
++        code: -32_002,
++        message: `thread not found: ${secret}`,
++        data: { prompt: 'private prompt', authorization: secret },
++      },
++    });
++  });
++
++  await assert.rejects(
++    requestCodexAppServer({
++      runtime: baseRuntime,
++      method: 'thread/delete',
++      params: { threadId: 'missing-thread' },
++      spawnImpl: harness.spawnImpl,
++    }),
++    (error) => {
++      assert.ok(error instanceof CodexAppServerError);
++      assert.equal(error.code, 'SERVER_ERROR');
++      assert.equal(error.details.category, 'rpc_error');
++      assert.equal(error.details.rpcCode, -32_002);
++      assert.equal(error.details.missingThread, true);
++      const exposed = JSON.stringify({ message: error.message, details: error.details });
++      assert.equal(exposed.includes(secret), false);
++      assert.equal(exposed.includes('private prompt'), false);
++      assert.equal(exposed.includes('missing-thread'), false);
++      return true;
++    },
++  );
++
++  await deleteCodexRetryThread({
++    runtime: baseRuntime,
++    threadId: 'missing-thread',
++    requestImpl: async () => {
++      throw new CodexAppServerError('Codex App Server thread/delete failed', {
++        category: 'rpc_error',
++        missingThread: true,
++      });
++    },
++  });
++});
 diff --git a/ai-bridge/services/codex/codex-retry.js b/ai-bridge/services/codex/codex-retry.js
 new file mode 100644
-index 00000000..2751a157
+index 0000000000000000000000000000000000000000..cc9e482460076077dee7cc755caef81d70b222e1
 --- /dev/null
 +++ b/ai-bridge/services/codex/codex-retry.js
-@@ -0,0 +1,295 @@
+@@ -0,0 +1,294 @@
 +export const CODEX_RETRY_DELAY_MS = 30_000;
 +export const CODEX_INACTIVITY_TIMEOUT_MS = 600_000;
 +export const CODEX_INACTIVITY_TIMEOUT_CODE = 'CODEX_STREAM_INACTIVITY_TIMEOUT';
@@ -674,8 +2039,7 @@ index 00000000..2751a157
 +  if (isDailyUsageLimit(evidence)) return false;
 +  if (statuses.has(429) || [...statuses].some((status) => status >= 500 && status <= 599)) return true;
 +  if (statuses.size > 0) return false;
-+  if ([...codes].some((code) => NETWORK_ERROR_CODES.has(code))) return true;
-+  if ([...codes].some((code) => code === 'MODEL_AT_CAPACITY' || code === 'RATE_LIMIT_EXCEEDED')) return true;
++  if ([...codes].some((code) => SAFE_RETRY_CODES.has(code))) return true;
 +
 +  return /selected model is at capacity|model[_\s-]?at[_\s-]?capacity|\btoo many requests\b|\brate limit(?:ed| exceeded)?\b/i.test(message) ||
 +    /\bfetch failed\b|\bnetwork error\b|socket (?:closed|hang up)|connection (?:reset|refused|closed|terminated)|premature (?:eof|stream|closure)|stream (?:ended|closed|terminated) (?:early|unexpectedly)|dns (?:lookup )?fail|timed? out/i.test(message);
@@ -792,10 +2156,10 @@ index 00000000..2751a157
 +}
 diff --git a/ai-bridge/services/codex/codex-retry.test.js b/ai-bridge/services/codex/codex-retry.test.js
 new file mode 100644
-index 00000000..6ca64ed4
+index 0000000000000000000000000000000000000000..e2fcc8df870d831882d2e7e4b57734adf536a2c0
 --- /dev/null
 +++ b/ai-bridge/services/codex/codex-retry.test.js
-@@ -0,0 +1,417 @@
+@@ -0,0 +1,432 @@
 +import test from 'node:test';
 +import assert from 'node:assert/strict';
 +import {
@@ -917,6 +2281,21 @@ index 00000000..6ca64ed4
 +  for (const error of retryable) {
 +    assert.equal(isRetryableCodexError(error), true, JSON.stringify(error));
 +  }
++});
++
++test('retries sanitized App Server failures unless an explicit terminal status wins', () => {
++  for (const code of [
++    'SERVER_ERROR',
++    'INTERNAL_SERVER_ERROR',
++    'SERVICE_UNAVAILABLE',
++    'BAD_GATEWAY',
++    'GATEWAY_TIMEOUT',
++  ]) {
++    assert.equal(isRetryableCodexError({ code }), true, code);
++  }
++  assert.equal(isRetryableCodexError({ status: 400, code: 'SERVER_ERROR' }), false);
++  assert.equal(isRetryableCodexError({ status: 401, code: 'SERVER_ERROR' }), false);
++  assert.equal(isRetryableCodexError({ status: 403, code: 'SERVER_ERROR' }), false);
 +});
 +
 +test('keeps transient HTTP 429 rate limiting retryable', () => {
@@ -1214,10 +2593,19 @@ index 00000000..6ca64ed4
 +  assert.equal(attempts, 1);
 +});
 diff --git a/ai-bridge/services/codex/message-service.js b/ai-bridge/services/codex/message-service.js
-index 9d2967b7..874ed2a5 100644
+index 9d2967b726d00ed67fb95aaee8f53da5f5078112..6741e42cd4a67602b3c81dbd1850db290a116ebd 100644
 --- a/ai-bridge/services/codex/message-service.js
 +++ b/ai-bridge/services/codex/message-service.js
-@@ -34,6 +34,133 @@ import {
+@@ -20,7 +20,7 @@
+ import { CodexPermissionMapper } from '../../utils/permission-mapper.js';
+ import { getMcpServerTools as getMcpServerToolsImpl } from '../claude/mcp-status/index.js';
+ import {
+-  logDebug, logInfo, logWarn,
++  logDebug,
+   ensureCodexSdk,
+   normalizeCodexPermissionMode,
+   resolveSandboxModeOverride,
+@@ -34,6 +34,354 @@ import {
    prepareSessionReplayBoundary,
    processCodexEventStream,
  } from './codex-event-handler.js';
@@ -1226,6 +2614,12 @@ index 9d2967b7..874ed2a5 100644
 +  runCodexTurnWithRetry,
 +  withCodexInactivityTimeout,
 +} from './codex-retry.js';
++import {
++  CodexAppServerError,
++  createCodexRetryAttempt,
++  getCodexForkRuntime,
++  readCodexStableBoundary,
++} from './codex-fork.js';
 +
 +export const CODEX_SESSION_POLL_INTERVAL_MS = 3_000;
 +
@@ -1289,6 +2683,81 @@ index 9d2967b7..874ed2a5 100644
 +  process.stdout.write(`[CODEX_RETRY] ${JSON.stringify(payload)}\n`);
 +}
 +
++function hasCodexToolActivity(state) {
++  if (!state || typeof state !== 'object') return false;
++  if (state.toolActivityObserved === true) return true;
++  return ['emittedToolUseIds', 'emittedToolResultIds', 'processedPatchCallIds']
++    .some((field) => state[field] instanceof Set && state[field].size > 0);
++}
++
++function trackAttemptThreadId(events, state, config) {
++  if (!events || typeof events[Symbol.asyncIterator] !== 'function') return events;
++  return {
++    async *[Symbol.asyncIterator]() {
++      for await (const event of events) {
++        if (event?.type === 'thread.started' && typeof event.thread_id === 'string' && event.thread_id) {
++          state.currentThreadId = event.thread_id;
++          config.threadId = event.thread_id;
++        }
++        yield event;
++      }
++    },
++  };
++}
++
++function normalizeStableBoundary(boundary, expectedSourceThreadId) {
++  const sourceThreadId = boundary?.sourceThreadId ?? null;
++  const lastTurnId = boundary?.lastTurnId ?? null;
++  const requiresFork = boundary?.requiresFork;
++  if (sourceThreadId !== expectedSourceThreadId) {
++    throw new CodexAppServerError('Codex stable boundary changed its source thread');
++  }
++  if (lastTurnId !== null && (typeof lastTurnId !== 'string' || !lastTurnId)) {
++    throw new CodexAppServerError('Codex stable boundary returned an invalid turn ID');
++  }
++  if (requiresFork !== undefined && typeof requiresFork !== 'boolean') {
++    throw new CodexAppServerError('Codex stable boundary returned an invalid fork requirement');
++  }
++  return Object.freeze({
++    sourceThreadId,
++    lastTurnId,
++    ...(requiresFork === true ? { requiresFork: true } : {}),
++  });
++}
++
++function withAttemptOperationTimeout(operationFactory, turnAbortController, {
++  timeoutMs,
++  timers,
++}) {
++  return withCodexInactivityTimeout(
++    Promise.resolve().then(() => operationFactory(turnAbortController.signal)),
++    { timeoutMs, turnAbortController, timers },
++  );
++}
++
++async function withCleanupOperationTimeout(cleanup, {
++  signal,
++  timeoutMs,
++  timers,
++}) {
++  const cleanupAbortController = new AbortController();
++  const onAbort = () => cleanupAbortController.abort(signal.reason);
++  if (signal?.aborted) onAbort();
++  else signal?.addEventListener('abort', onAbort, { once: true });
++  try {
++    return await withCodexInactivityTimeout(
++      Promise.resolve().then(() => cleanup(cleanupAbortController.signal)),
++      {
++        timeoutMs,
++        turnAbortController: cleanupAbortController,
++        timers,
++      },
++    );
++  } finally {
++    signal?.removeEventListener('abort', onAbort);
++  }
++}
++
 +export async function runCodexMessageAttempts({
 +  thread,
 +  runInput,
@@ -1303,12 +2772,51 @@ index 9d2967b7..874ed2a5 100644
 +  onStreamStart,
 +  onRetry,
 +  onAttemptStart,
++  resolveStableBoundary,
++  createRetryAttempt,
 +  now,
 +}) {
 +  let streamStarted = false;
++  const attemptConfigBase = config || {};
++  const initialSourceThreadId = attemptConfigBase.threadId
++    || thread?.id
++    || state?.currentThreadId
++    || null;
++  if (typeof resolveStableBoundary !== 'function') {
++    throw new TypeError('Codex stable boundary resolver is required');
++  }
++  const resolveBoundary = resolveStableBoundary;
++  const requireCompletedTurn = processEvents === processCodexEventStream;
++  let stableBoundary = null;
++  let boundaryResolved = false;
++  let requestStarted = false;
++  let pendingCleanup = null;
++  let pendingAttemptError = null;
 +  const resolvedInactivityTimeoutMs = resolveCodexInactivityTimeoutMs(
 +    inactivityTimeoutMs ?? process.env.CCGUI_CODEX_INACTIVITY_TIMEOUT_MS,
 +  );
++
++  const finishPendingCleanup = async (turnAbortController = null) => {
++    if (!pendingCleanup) return;
++    const cleanup = pendingCleanup;
++    if (turnAbortController) {
++      await withAttemptOperationTimeout(cleanup, turnAbortController, {
++        timeoutMs: resolvedInactivityTimeoutMs,
++        timers: inactivityTimers,
++      });
++    } else {
++      await withCleanupOperationTimeout(cleanup, {
++        signal,
++        timeoutMs: resolvedInactivityTimeoutMs,
++        timers: inactivityTimers,
++      });
++    }
++    pendingCleanup = null;
++    const attemptError = pendingAttemptError;
++    pendingAttemptError = null;
++    if (attemptError) throw attemptError;
++  };
++
 +  emitCodexRetryState({ phase: 'attempt_started', retryCount: 0 });
 +  await runCodexTurnWithRetry({
 +    state,
@@ -1323,35 +2831,147 @@ index 9d2967b7..874ed2a5 100644
 +      emitCodexRetryState({ phase: 'attempt_started', retryCount });
 +      onAttemptStart?.({ retryCount });
 +    },
-+    runAttempt: async ({ turnAbortController, retryCount }) => {
-+      if (retryCount > 0) {
-+        await prepareReplayBoundary(state, state.currentThreadId || config.threadId || null);
-+      }
-+      const { events } = await withCodexInactivityTimeout(
-+        thread.runStreamed(runInput, { signal: turnAbortController.signal }),
-+        {
++    runAttempt: async ({ turnAbortController }) => {
++      let activeRetryAttempt = null;
++      try {
++        await finishPendingCleanup(turnAbortController);
++
++        if (!boundaryResolved) {
++          const resolvedBoundary = await withAttemptOperationTimeout(
++            (attemptSignal) => resolveBoundary({
++              sourceThreadId: initialSourceThreadId,
++              signal: attemptSignal,
++            }),
++            turnAbortController,
++            {
++              timeoutMs: resolvedInactivityTimeoutMs,
++              timers: inactivityTimers,
++            },
++          );
++          stableBoundary = normalizeStableBoundary(resolvedBoundary, initialSourceThreadId);
++          boundaryResolved = true;
++        }
++
++        let streamedTurn;
++        let attemptThreadId = stableBoundary.sourceThreadId;
++        if (
++          !requestStarted
++          && stableBoundary.sourceThreadId
++          && stableBoundary.lastTurnId
++          && stableBoundary.requiresFork !== true
++        ) {
++          requestStarted = true;
++          streamedTurn = await thread.runStreamed(runInput, {
++            signal: turnAbortController.signal,
++          });
++        } else {
++          if (typeof createRetryAttempt !== 'function') {
++            throw new CodexAppServerError('Codex retry adapter is unavailable');
++          }
++          activeRetryAttempt = await withAttemptOperationTimeout(
++            (attemptSignal) => createRetryAttempt({
++              stableBoundary,
++              runInput,
++              hasToolActivity: hasCodexToolActivity(state),
++              signal: attemptSignal,
++            }),
++            turnAbortController,
++            {
++              timeoutMs: resolvedInactivityTimeoutMs,
++              timers: inactivityTimers,
++            },
++          );
++          if (!activeRetryAttempt?.events) {
++            throw new CodexAppServerError('Codex retry adapter returned no event stream');
++          }
++          attemptThreadId = activeRetryAttempt.getThreadId?.() || null;
++          await prepareReplayBoundary(state, attemptThreadId);
++          requestStarted = true;
++          streamedTurn = { events: activeRetryAttempt.events };
++        }
++
++        const { events } = await withCodexInactivityTimeout(
++          streamedTurn,
++          {
++            timeoutMs: resolvedInactivityTimeoutMs,
++            turnAbortController,
++            timers: inactivityTimers,
++          },
++        );
++        if (!streamStarted) {
++          streamStarted = true;
++          onStreamStart?.();
++        }
++        const watchedEvents = withCodexEventInactivityWatchdog(events, {
 +          timeoutMs: resolvedInactivityTimeoutMs,
 +          turnAbortController,
 +          timers: inactivityTimers,
-+        },
-+      );
-+      if (!streamStarted) {
-+        streamStarted = true;
-+        onStreamStart?.();
++        });
++        let deferredTurnCompletion = null;
++        const attemptConfig = {
++          ...attemptConfigBase,
++          threadId: attemptThreadId || stableBoundary.sourceThreadId,
++          turnAbortController,
++          publishThreadId: !activeRetryAttempt,
++          onTurnCompleted: activeRetryAttempt
++            ? (...args) => { deferredTurnCompletion = args; }
++            : attemptConfigBase.onTurnCompleted,
++        };
++        await processEvents(trackAttemptThreadId(watchedEvents, state, attemptConfig), state, attemptConfig);
++        if (
++          requireCompletedTurn
++          && state?.turnCompleted !== true
++          && state?.commandApprovalAbortRequested !== true
++        ) {
++          throw new CodexAppServerError('Codex SDK stream ended before turn completion');
++        }
++        const successfulThreadId = activeRetryAttempt?.getThreadId?.()
++          || state?.currentThreadId
++          || attemptConfig.threadId
++          || null;
++        if (successfulThreadId) {
++          state.currentThreadId = successfulThreadId;
++          attemptConfigBase.threadId = successfulThreadId;
++        }
++        if (activeRetryAttempt && successfulThreadId) {
++          console.log('[THREAD_ID]', successfulThreadId);
++          if (deferredTurnCompletion) {
++            attemptConfigBase.onTurnCompleted?.(...deferredTurnCompletion);
++          }
++        }
++        activeRetryAttempt = null;
++      } catch (error) {
++        if (typeof activeRetryAttempt?.cleanup === 'function') {
++          const failedAttempt = activeRetryAttempt;
++          pendingCleanup = (cleanupSignal) => failedAttempt.cleanup(cleanupSignal);
++          pendingAttemptError = error;
++          activeRetryAttempt = null;
++          try {
++            await finishPendingCleanup();
++          } catch (cleanupError) {
++            throw cleanupError;
++          }
++        }
++        throw error;
 +      }
-+      const watchedEvents = withCodexEventInactivityWatchdog(events, {
-+        timeoutMs: resolvedInactivityTimeoutMs,
-+        turnAbortController,
-+        timers: inactivityTimers,
-+      });
-+      await processEvents(watchedEvents, state, { ...config, turnAbortController });
 +    },
 +  });
 +}
  
  // ---------------------------------------------------------------------------
  // sendMessage
-@@ -260,13 +387,6 @@ export async function sendMessage(
+@@ -220,6 +568,10 @@ export async function sendMessage(
+       console.log('[DEBUG] Starting new thread');
+       thread = codex.startThread(threadOptions);
+     }
++    const codexForkRuntime = getCodexForkRuntime(thread);
++    if (!codexForkRuntime) {
++      throw new Error('Codex SDK 0.148.0 or newer is required for reliable retry forks');
++    }
+ 
+     // ============================================================
+     // 5. Collect AGENTS.md Instructions (only for new threads)
+@@ -260,13 +612,6 @@ export async function sendMessage(
      const state = createInitialEventState(emitMessage);
      await prepareSessionReplayBoundary(state, threadId);
  
@@ -1365,7 +2985,7 @@ index 9d2967b7..874ed2a5 100644
      // ============================================================
      // 7. Delegate Event Processing to codex-event-handler
      // ============================================================
-@@ -276,12 +396,21 @@ export async function sendMessage(
+@@ -276,12 +621,33 @@ export async function sendMessage(
        threadId,
        threadOptions,
        normalizedPermissionMode,
@@ -1383,6 +3003,18 @@ index 9d2967b7..874ed2a5 100644
 +      state,
 +      config,
 +      signal: operationAbortController.signal,
++      resolveStableBoundary: ({ sourceThreadId, signal }) => readCodexStableBoundary({
++        runtime: codexForkRuntime,
++        sourceThreadId,
++        signal,
++      }),
++      createRetryAttempt: (options) => createCodexRetryAttempt({
++        ...options,
++        runtime: codexForkRuntime,
++        codex,
++        threadOptions,
++        cleanupSignal: operationAbortController.signal,
++      }),
 +      onStreamStart: () => {
 +        console.log('[STREAM_START]');
 +        streamStarted = true;
@@ -1393,15 +3025,38 @@ index 9d2967b7..874ed2a5 100644
      // ============================================================
 diff --git a/ai-bridge/services/codex/message-service.retry.test.js b/ai-bridge/services/codex/message-service.retry.test.js
 new file mode 100644
-index 00000000..c1fc49aa
+index 0000000000000000000000000000000000000000..01921e04bbdb2f8d0f4f5cc9cb8da9d14d33d932
 --- /dev/null
 +++ b/ai-bridge/services/codex/message-service.retry.test.js
-@@ -0,0 +1,406 @@
+@@ -0,0 +1,902 @@
 +import test from 'node:test';
 +import assert from 'node:assert/strict';
 +import { readFileSync } from 'node:fs';
 +import { runCodexMessageAttempts } from './message-service.js';
++import { createInitialEventState } from './codex-event-handler.js';
 +import { CodexTurnFailure } from './codex-retry.js';
++import { CodexAppServerError } from './codex-fork.js';
++
++const STABLE_BOUNDARY = Object.freeze({
++  sourceThreadId: 'source-thread',
++  lastTurnId: 'stable-turn',
++});
++
++function resolveStableBoundary(boundary = STABLE_BOUNDARY) {
++  return async () => ({ ...boundary });
++}
++
++function retryAttempt(threadId, events = []) {
++  return {
++    events,
++    getThreadId: () => threadId,
++    cleanup: async () => {},
++  };
++}
++
++async function* eventsFrom(items) {
++  for (const item of items) yield item;
++}
 +
 +async function captureStdout(fn) {
 +  const original = process.stdout.write.bind(process.stdout);
@@ -1432,10 +3087,448 @@ index 00000000..c1fc49aa
 +  assert.doesNotMatch(sendMessageSource, /Codex request failed \(\$\{reason\}\)/);
 +});
 +
++test('requires a stable boundary resolver instead of silently dropping context', async () => {
++  let runCalls = 0;
++  await assert.rejects(
++    runCodexMessageAttempts({
++      thread: {
++        id: 'source-thread',
++        async runStreamed() {
++          runCalls += 1;
++          return { events: [] };
++        },
++      },
++      runInput: 'must not run without a boundary',
++      state: {},
++      config: {},
++      processEvents: async () => {},
++    }),
++    /stable boundary resolver is required/,
++  );
++  assert.equal(runCalls, 0);
++});
++
++test('retries boundary discovery without submitting or forking a turn', async () => {
++  let boundaryReads = 0;
++  let originalRunCalls = 0;
++  let retryAttemptCalls = 0;
++  const delays = [];
++
++  await captureStdout(async () => {
++    await runCodexMessageAttempts({
++      thread: {
++        id: 'source-thread',
++        async runStreamed() {
++          originalRunCalls += 1;
++          return { events: [] };
++        },
++      },
++      runInput: 'submit only after setup',
++      state: {},
++      config: {},
++      processEvents: async () => {},
++      resolveStableBoundary: async ({ sourceThreadId }) => {
++        boundaryReads += 1;
++        assert.equal(sourceThreadId, 'source-thread');
++        if (boundaryReads === 1) {
++          throw new CodexAppServerError('Codex App Server thread/read process failed');
++        }
++        return { ...STABLE_BOUNDARY };
++      },
++      createRetryAttempt: async () => {
++        retryAttemptCalls += 1;
++        return retryAttempt('unexpected-child');
++      },
++      sleep: async (delayMs) => delays.push(delayMs),
++    });
++  });
++
++  assert.equal(boundaryReads, 2);
++  assert.equal(originalRunCalls, 1);
++  assert.equal(retryAttemptCalls, 0);
++  assert.deepEqual(delays, [30_000]);
++});
++
++test('forks a source with trailing failed history before the first outbound turn', async () => {
++  const state = { currentThreadId: 'source-thread' };
++  let originalRunCalls = 0;
++  let retryAttemptCalls = 0;
++
++  await captureStdout(async () => {
++    await runCodexMessageAttempts({
++      thread: {
++        id: 'source-thread',
++        async runStreamed() {
++          originalRunCalls += 1;
++          assert.fail('a dirty source thread must not receive another turn');
++        },
++      },
++      runInput: 'recover after bridge restart',
++      state,
++      config: {},
++      processEvents: async () => {},
++      resolveStableBoundary: async () => ({
++        ...STABLE_BOUNDARY,
++        requiresFork: true,
++      }),
++      createRetryAttempt: async ({ stableBoundary }) => {
++        retryAttemptCalls += 1;
++        assert.deepEqual(stableBoundary, {
++          ...STABLE_BOUNDARY,
++          requiresFork: true,
++        });
++        return retryAttempt('recovered-child');
++      },
++    });
++  });
++
++  assert.equal(originalRunCalls, 0);
++  assert.equal(retryAttemptCalls, 1);
++  assert.equal(state.currentThreadId, 'recovered-child');
++});
++
++test('forks every retry through one immutable completed turn', async () => {
++  const order = [];
++  const boundaries = [];
++  const cleaned = [];
++  const runInput = [{ type: 'text', text: 'fixed input' }];
++  const state = { currentThreadId: 'source-thread' };
++  let boundaryReads = 0;
++  let processCalls = 0;
++  let childNumber = 0;
++
++  await captureStdout(async () => {
++    await runCodexMessageAttempts({
++      thread: {
++        id: 'source-thread',
++        async runStreamed(input) {
++          assert.equal(input, runInput);
++          order.push('run:source');
++          return { events: { threadId: 'source-thread' } };
++        },
++      },
++      runInput,
++      state,
++      config: {},
++      resolveStableBoundary: async () => {
++        boundaryReads += 1;
++        return { ...STABLE_BOUNDARY };
++      },
++      createRetryAttempt: async (options) => {
++        childNumber += 1;
++        const threadId = `child-${childNumber}`;
++        assert.equal(options.runInput, runInput);
++        assert.equal(Object.isFrozen(options.stableBoundary), true);
++        boundaries.push({ ...options.stableBoundary });
++        order.push(`create:${threadId}`);
++        return {
++          events: { threadId },
++          getThreadId: () => threadId,
++          cleanup: async () => {
++            cleaned.push(threadId);
++            order.push(`cleanup:${threadId}`);
++          },
++        };
++      },
++      processEvents: async (events) => {
++        processCalls += 1;
++        order.push(`process:${events.threadId}`);
++        if (processCalls <= 3) {
++          throw new CodexTurnFailure('HTTP 503', { status: 503 });
++        }
++      },
++      sleep: async (delayMs) => assert.equal(delayMs, 30_000),
++    });
++  });
++
++  assert.equal(boundaryReads, 1);
++  assert.deepEqual(boundaries, [
++    STABLE_BOUNDARY,
++    STABLE_BOUNDARY,
++    STABLE_BOUNDARY,
++  ]);
++  assert.deepEqual(cleaned, ['child-1', 'child-2']);
++  assert.equal(order.indexOf('cleanup:child-1') < order.indexOf('create:child-2'), true);
++  assert.equal(order.indexOf('cleanup:child-2') < order.indexOf('create:child-3'), true);
++  assert.equal(state.currentThreadId, 'child-3');
++});
++
++test('publishes a retry child thread ID only after that child succeeds', async () => {
++  const state = createInitialEventState(() => {});
++  let childNumber = 0;
++
++  const captured = await captureStdout(async () => {
++    await runCodexMessageAttempts({
++      thread: {
++        id: 'source-thread',
++        async runStreamed() {
++          return {
++            events: eventsFrom([
++              { type: 'thread.started', thread_id: 'source-thread' },
++              { type: 'turn.failed', error: { message: 'HTTP 503', status: 503 } },
++            ]),
++          };
++        },
++      },
++      runInput: 'publish only the recovered branch',
++      state,
++      config: {},
++      prepareReplayBoundary: async () => {},
++      resolveStableBoundary: resolveStableBoundary(),
++      createRetryAttempt: async () => {
++        childNumber += 1;
++        const threadId = `child-${childNumber}`;
++        const terminalEvent = childNumber === 1
++          ? { type: 'turn.failed', error: { message: 'HTTP 503', status: 503 } }
++          : { type: 'turn.completed', usage: {} };
++        return {
++          events: eventsFrom([
++            { type: 'thread.started', thread_id: threadId },
++            terminalEvent,
++          ]),
++          getThreadId: () => threadId,
++          cleanup: async () => {},
++        };
++      },
++      sleep: async () => {},
++    });
++  });
++
++  assert.deepEqual(
++    captured.filter((line) => line.startsWith('[THREAD_ID]')),
++    ['[THREAD_ID] source-thread\n', '[THREAD_ID] child-2\n'],
++  );
++  assert.equal(state.currentThreadId, 'child-2');
++});
++
++test('deletes and retries a child stream that ends without turn.completed', async () => {
++  const state = createInitialEventState(() => {});
++  const cleaned = [];
++  let childNumber = 0;
++
++  const captured = await captureStdout(async () => {
++    await runCodexMessageAttempts({
++      thread: {
++        id: 'source-thread',
++        async runStreamed() {
++          return {
++            events: eventsFrom([
++              { type: 'thread.started', thread_id: 'source-thread' },
++              { type: 'turn.failed', error: { message: 'HTTP 503', status: 503 } },
++            ]),
++          };
++        },
++      },
++      runInput: 'reject an incomplete child stream',
++      state,
++      config: {},
++      prepareReplayBoundary: async () => {},
++      resolveStableBoundary: resolveStableBoundary(),
++      createRetryAttempt: async () => {
++        childNumber += 1;
++        const threadId = `child-${childNumber}`;
++        const terminalEvents = childNumber === 1
++          ? []
++          : [{ type: 'turn.completed', usage: {} }];
++        return {
++          events: eventsFrom([
++            { type: 'thread.started', thread_id: threadId },
++            ...terminalEvents,
++          ]),
++          getThreadId: () => threadId,
++          cleanup: async () => cleaned.push(threadId),
++        };
++      },
++      sleep: async () => {},
++    });
++  });
++
++  assert.equal(childNumber, 2);
++  assert.deepEqual(cleaned, ['child-1']);
++  assert.deepEqual(
++    captured.filter((line) => line.startsWith('[THREAD_ID]')),
++    ['[THREAD_ID] source-thread\n', '[THREAD_ID] child-2\n'],
++  );
++});
++
++test('retries failed child cleanup before creating another branch', async () => {
++  const order = [];
++  const delays = [];
++  let processCalls = 0;
++  let childNumber = 0;
++  let childOneCleanupCalls = 0;
++
++  await captureStdout(async () => {
++    await runCodexMessageAttempts({
++      thread: {
++        id: 'source-thread',
++        async runStreamed() {
++          return { events: { threadId: 'source-thread' } };
++        },
++      },
++      runInput: 'cleanup before fork',
++      state: {},
++      config: {},
++      resolveStableBoundary: resolveStableBoundary(),
++      createRetryAttempt: async () => {
++        childNumber += 1;
++        const threadId = `child-${childNumber}`;
++        order.push(`create:${threadId}`);
++        return {
++          events: { threadId },
++          getThreadId: () => threadId,
++          cleanup: async () => {
++            if (threadId !== 'child-1') assert.fail('successful child must not be deleted');
++            childOneCleanupCalls += 1;
++            if (childOneCleanupCalls === 1) {
++              order.push('cleanup:child-1:fail');
++              throw new CodexAppServerError('Codex App Server thread/delete process failed');
++            }
++            order.push('cleanup:child-1:success');
++          },
++        };
++      },
++      processEvents: async () => {
++        processCalls += 1;
++        if (processCalls <= 2) {
++          throw new CodexTurnFailure('HTTP 503', { status: 503 });
++        }
++      },
++      sleep: async (delayMs) => delays.push(delayMs),
++    });
++  });
++
++  assert.deepEqual(order, [
++    'create:child-1',
++    'cleanup:child-1:fail',
++    'cleanup:child-1:success',
++    'create:child-2',
++  ]);
++  assert.deepEqual(delays, [30_000, 30_000, 30_000]);
++});
++
++test('uses a distinct fresh thread for every no-history attempt', async () => {
++  const created = [];
++  const cleaned = [];
++  const toolActivityFlags = [];
++  const runInput = [
++    { type: 'text', text: 'fresh retry' },
++    { type: 'local_image', path: '/tmp/fresh.png' },
++  ];
++  const state = {};
++  let processCalls = 0;
++
++  await captureStdout(async () => {
++    await runCodexMessageAttempts({
++      thread: {
++        id: null,
++        async runStreamed() {
++          assert.fail('the placeholder SDK thread must never receive a no-history turn');
++        },
++      },
++      runInput,
++      state,
++      config: {},
++      resolveStableBoundary: resolveStableBoundary({
++        sourceThreadId: null,
++        lastTurnId: null,
++      }),
++      createRetryAttempt: async (options) => {
++        const threadId = `fresh-${created.length + 1}`;
++        assert.equal(options.runInput, runInput);
++        assert.deepEqual(options.stableBoundary, {
++          sourceThreadId: null,
++          lastTurnId: null,
++        });
++        toolActivityFlags.push(options.hasToolActivity);
++        created.push(threadId);
++        return {
++          events: { threadId },
++          getThreadId: () => threadId,
++          cleanup: async () => cleaned.push(threadId),
++        };
++      },
++      processEvents: async () => {
++        processCalls += 1;
++        if (processCalls === 1) state.toolActivityObserved = true;
++        if (processCalls <= 2) {
++          throw new CodexTurnFailure('HTTP 503', { status: 503 });
++        }
++      },
++      sleep: async () => {},
++    });
++  });
++
++  assert.deepEqual(created, ['fresh-1', 'fresh-2', 'fresh-3']);
++  assert.deepEqual(cleaned, ['fresh-1', 'fresh-2']);
++  assert.deepEqual(toolActivityFlags, [false, true, true]);
++  assert.equal(state.currentThreadId, 'fresh-3');
++});
++
++test('preserves a terminal retry error while retrying failed branch cleanup', async () => {
++  const terminalError = new CodexTurnFailure('daily usage limit exceeded', {
++    status: 429,
++    reason: 'DAYLY-LIMIT-EXCEEDED',
++    message: 'daily usage limit exceeded',
++  });
++  const order = [];
++  const delays = [];
++  let processCalls = 0;
++  let cleanupCalls = 0;
++  let createCalls = 0;
++
++  await captureStdout(async () => {
++    await assert.rejects(
++      runCodexMessageAttempts({
++        thread: {
++          id: 'source-thread',
++          async runStreamed() {
++            return { events: { threadId: 'source-thread' } };
++          },
++        },
++        runInput: 'terminal child',
++        state: {},
++        config: {},
++        resolveStableBoundary: resolveStableBoundary(),
++        createRetryAttempt: async () => {
++          createCalls += 1;
++          order.push('create:child-1');
++          return {
++            events: { threadId: 'child-1' },
++            getThreadId: () => 'child-1',
++            cleanup: async () => {
++              cleanupCalls += 1;
++              if (cleanupCalls === 1) {
++                order.push('cleanup:fail');
++                throw new CodexAppServerError('Codex App Server thread/delete process failed');
++              }
++              order.push('cleanup:success');
++            },
++          };
++        },
++        processEvents: async () => {
++          processCalls += 1;
++          if (processCalls === 1) {
++            throw new CodexTurnFailure('HTTP 503', { status: 503 });
++          }
++          throw terminalError;
++        },
++        sleep: async (delayMs) => delays.push(delayMs),
++      }),
++      (error) => error === terminalError,
++    );
++  });
++
++  assert.equal(createCalls, 1);
++  assert.deepEqual(order, ['create:child-1', 'cleanup:fail', 'cleanup:success']);
++  assert.deepEqual(delays, [30_000, 30_000]);
++});
++
 +test('emits the initial attempt state before invoking the Codex SDK', async () => {
 +  const captured = await captureStdout(async (lines) => {
 +    await runCodexMessageAttempts({
 +      thread: {
++        id: 'source-thread',
 +        async runStreamed() {
 +          assert.deepEqual(retryPayloads(lines), [
 +            { phase: 'attempt_started', retryCount: 0 },
@@ -1447,6 +3540,7 @@ index 00000000..c1fc49aa
 +      state: {},
 +      config: {},
 +      processEvents: async () => {},
++      resolveStableBoundary: resolveStableBoundary(),
 +    });
 +  });
 +
@@ -1457,19 +3551,15 @@ index 00000000..c1fc49aa
 +
 +test('emits safe scheduled and attempt-started retry lifecycle lines', async () => {
 +  const order = [];
-+  let attempts = 0;
 +  const nestedSecret = 'nested-response-secret';
 +  const thread = {
++    id: 'source-thread',
 +    async runStreamed() {
-+      attempts += 1;
-+      order.push(`run:${attempts}`);
-+      if (attempts === 1) {
-+        throw new CodexTurnFailure('HTTP 503\nAuthorization: Bearer top-secret', {
-+          status: 503,
-+          response: { body: nestedSecret },
-+        });
-+      }
-+      return { events: [] };
++      order.push('run:original');
++      throw new CodexTurnFailure('HTTP 503\nAuthorization: Bearer top-secret', {
++        status: 503,
++        response: { body: nestedSecret },
++      });
 +    },
 +  };
 +
@@ -1487,6 +3577,12 @@ index 00000000..c1fc49aa
 +        assert.equal(scheduled.phase, 'scheduled');
 +      },
 +      onAttemptStart: ({ retryCount }) => order.push(`callback:${retryCount}`),
++      resolveStableBoundary: resolveStableBoundary(),
++      createRetryAttempt: async ({ stableBoundary }) => {
++        assert.deepEqual(stableBoundary, STABLE_BOUNDARY);
++        order.push('create:child-1');
++        return retryAttempt('child-1');
++      },
 +    });
 +  });
 +
@@ -1505,26 +3601,33 @@ index 00000000..c1fc49aa
 +    },
 +    { phase: 'attempt_started', retryCount: 1 },
 +  ]);
-+  assert.deepEqual(order, ['run:1', 'sleep:30000', 'callback:1', 'run:2']);
++  assert.deepEqual(order, [
++    'run:original',
++    'sleep:30000',
++    'callback:1',
++    'create:child-1',
++  ]);
 +  assert.equal(captured.join('').includes('top-secret'), false);
 +  assert.equal(captured.join('').includes(nestedSecret), false);
 +});
 +
-+test('keeps one logical stream open across a retry and reuses the thread input', async () => {
++test('keeps one logical stream open while moving a retry to a child thread', async () => {
 +  const runCalls = [];
 +  const attemptControllers = [];
++  const retryInputs = [];
 +  const retryNotices = [];
 +  const replayBoundaries = [];
 +  let streamStarts = 0;
 +  let streamEnds = 0;
 +  let processCalls = 0;
 +  const runInput = [{ type: 'text', text: 'continue this task' }];
-+  const state = { currentThreadId: 'thread-1' };
++  const state = { currentThreadId: 'source-thread' };
 +  const thread = {
++    id: 'source-thread',
 +    async runStreamed(input, options) {
 +      runCalls.push(input);
 +      attemptControllers.push(options.signal);
-+      return { events: { attempt: runCalls.length } };
++      return { events: { attempt: 'original' } };
 +    },
 +  };
 +
@@ -1536,7 +3639,7 @@ index 00000000..c1fc49aa
 +    processEvents: async (events, receivedState, config) => {
 +      processCalls += 1;
 +      assert.equal(receivedState, state);
-+      assert.equal(events.attempt, processCalls);
++      assert.equal(events.attempt, processCalls === 1 ? 'original' : 'child-1');
 +      assert.equal(config.turnAbortController.signal, attemptControllers.at(-1));
 +      if (processCalls === 1) {
 +        throw new CodexTurnFailure('HTTP 503', { status: 503 });
@@ -1550,17 +3653,23 @@ index 00000000..c1fc49aa
 +      assert.equal(receivedState, state);
 +      replayBoundaries.push(threadId);
 +    },
++    resolveStableBoundary: resolveStableBoundary(),
++    createRetryAttempt: async ({ runInput: retryInput, signal }) => {
++      retryInputs.push(retryInput);
++      attemptControllers.push(signal);
++      return retryAttempt('child-1', { attempt: 'child-1' });
++    },
 +  });
 +
-+  assert.equal(runCalls.length, 2);
++  assert.equal(runCalls.length, 1);
 +  assert.equal(runCalls[0], runInput);
-+  assert.equal(runCalls[1], runInput);
++  assert.equal(retryInputs[0], runInput);
 +  assert.notEqual(attemptControllers[0], attemptControllers[1]);
 +  assert.equal(streamStarts, 1);
 +  assert.equal(streamEnds, 1);
 +  assert.equal(retryNotices.length, 1);
-+  assert.deepEqual(replayBoundaries, ['thread-1']);
-+  assert.equal(state.currentThreadId, 'thread-1');
++  assert.deepEqual(replayBoundaries, ['child-1']);
++  assert.equal(state.currentThreadId, 'child-1');
 +});
 +
 +test('retries a transport failure thrown before event processing starts', async () => {
@@ -1568,12 +3677,13 @@ index 00000000..c1fc49aa
 +  let processCalls = 0;
 +  let streamStarts = 0;
 +  const thread = {
++    id: 'source-thread',
 +    async runStreamed() {
 +      runCalls += 1;
-+      if (runCalls === 1) throw Object.assign(new Error('fetch failed'), { code: 'ECONNREFUSED' });
-+      return { events: [] };
++      throw Object.assign(new Error('fetch failed'), { code: 'ECONNREFUSED' });
 +    },
 +  };
++  let retryAttemptCalls = 0;
 +
 +  await runCodexMessageAttempts({
 +    thread,
@@ -1583,9 +3693,15 @@ index 00000000..c1fc49aa
 +    processEvents: async () => { processCalls += 1; },
 +    sleep: async () => {},
 +    onStreamStart: () => { streamStarts += 1; },
++    resolveStableBoundary: resolveStableBoundary(),
++    createRetryAttempt: async () => {
++      retryAttemptCalls += 1;
++      return retryAttempt('child-1');
++    },
 +  });
 +
-+  assert.equal(runCalls, 2);
++  assert.equal(runCalls, 1);
++  assert.equal(retryAttemptCalls, 1);
 +  assert.equal(processCalls, 1);
 +  assert.equal(streamStarts, 1);
 +});
@@ -1601,6 +3717,7 @@ index 00000000..c1fc49aa
 +    },
 +  });
 +  const thread = {
++    id: 'source-thread',
 +    async runStreamed() {
 +      runCalls += 1;
 +      throw terminalError;
@@ -1616,6 +3733,7 @@ index 00000000..c1fc49aa
 +        config: {},
 +        processEvents: async () => {},
 +        sleep: async () => assert.fail('daily limit failure must not sleep'),
++        resolveStableBoundary: resolveStableBoundary(),
 +      }),
 +      (error) => error === terminalError,
 +    );
@@ -1634,6 +3752,7 @@ index 00000000..c1fc49aa
 +  const pendingTimers = new Map();
 +  let nextTimerId = 1;
 +  let runCalls = 0;
++  let retryAttemptCalls = 0;
 +  let firstAttemptSignal;
 +  const timers = {
 +    setTimeout(callback, delay) {
@@ -1647,27 +3766,19 @@ index 00000000..c1fc49aa
 +    },
 +  };
 +  const thread = {
++    id: 'source-thread',
 +    async runStreamed(_input, options) {
 +      runCalls += 1;
-+      if (runCalls === 1) {
-+        firstAttemptSignal = options.signal;
-+        return {
-+          events: {
-+            [Symbol.asyncIterator]() {
-+              return {
-+                next: () => new Promise((resolve, reject) => {
-+                  options.signal.addEventListener('abort', () => reject(options.signal.reason), { once: true });
-+                }),
-+                return: async () => ({ done: true }),
-+              };
-+            },
-+          },
-+        };
-+      }
++      firstAttemptSignal = options.signal;
 +      return {
 +        events: {
-+          async *[Symbol.asyncIterator]() {
-+            yield { type: 'turn.started' };
++          [Symbol.asyncIterator]() {
++            return {
++              next: () => new Promise((resolve, reject) => {
++                options.signal.addEventListener('abort', () => reject(options.signal.reason), { once: true });
++              }),
++              return: async () => ({ done: true }),
++            };
 +          },
 +        },
 +      };
@@ -1688,6 +3799,15 @@ index 00000000..c1fc49aa
 +    inactivityTimers: timers,
 +    sleep: async (ms) => delays.push(ms),
 +    onRetry: (notice) => retryNotices.push(notice),
++    resolveStableBoundary: resolveStableBoundary(),
++    createRetryAttempt: async () => {
++      retryAttemptCalls += 1;
++      return retryAttempt('child-1', {
++        async *[Symbol.asyncIterator]() {
++          yield { type: 'turn.started' };
++        },
++      });
++    },
 +  });
 +
 +  await new Promise(setImmediate);
@@ -1701,7 +3821,8 @@ index 00000000..c1fc49aa
 +
 +  assert.equal(firstAttemptSignal.aborted, true);
 +  assert.equal(firstAttemptSignal.reason?.code, 'CODEX_STREAM_INACTIVITY_TIMEOUT');
-+  assert.equal(runCalls, 2);
++  assert.equal(runCalls, 1);
++  assert.equal(retryAttemptCalls, 1);
 +  assert.deepEqual(delays, [30_000]);
 +  assert.equal(retryNotices.length, 1);
 +  assert.ok(timerDelays.length >= 4);
@@ -1716,6 +3837,7 @@ index 00000000..c1fc49aa
 +  const retryNotices = [];
 +  let nextTimerId = 1;
 +  let runCalls = 0;
++  let retryAttemptCalls = 0;
 +
 +  const timers = {
 +    setTimeout(callback, delay) {
@@ -1744,9 +3866,9 @@ index 00000000..c1fc49aa
 +  };
 +
 +  const thread = {
++    id: 'source-thread',
 +    async runStreamed(_input, options) {
 +      runCalls += 1;
-+      if (runCalls > 1) return { events: [] };
 +      return {
 +        events: {
 +          [Symbol.asyncIterator]() {
@@ -1775,6 +3897,11 @@ index 00000000..c1fc49aa
 +    inactivityTimers: timers,
 +    sleep: async () => {},
 +    onRetry: (notice) => retryNotices.push(notice),
++    resolveStableBoundary: resolveStableBoundary(),
++    createRetryAttempt: async () => {
++      retryAttemptCalls += 1;
++      return retryAttempt('child-1');
++    },
 +  });
 +
 +  try {
@@ -1799,12 +3926,13 @@ index 00000000..c1fc49aa
 +    await running.catch(() => {});
 +  }
 +
-+  assert.equal(runCalls, 2);
++  assert.equal(runCalls, 1);
++  assert.equal(retryAttemptCalls, 1);
 +  assert.equal(retryNotices.length, 1);
 +  assert.equal(retryNotices[0].reason.category, 'inactivity');
 +});
 diff --git a/build.gradle b/build.gradle
-index 264cbfc4..dfde6e3a 100644
+index 264cbfc4f9286fe7f860bf5a67ab61628f796e6e..b5bcd24b25d2bcd7d8dd70d77b0d45cc0ee96d66 100644
 --- a/build.gradle
 +++ b/build.gradle
 @@ -42,7 +42,7 @@ tasks.named('checkstyleTest') {
@@ -1812,12 +3940,41 @@ index 264cbfc4..dfde6e3a 100644
  
  group = 'com.github.idea-claude-code-gui'
 -version = '0.5.2'
-+version = '0.5.2-retry.5'
++version = '0.5.2-retry.6'
  
  java {
      sourceCompatibility = JavaVersion.VERSION_17
+diff --git a/src/main/java/com/github/claudecodegui/dependency/SdkDefinition.java b/src/main/java/com/github/claudecodegui/dependency/SdkDefinition.java
+index e04aca1c260b327d107ec16efbc8212eabb7bd26..9a52d2ed880e2dc85aa01c187e3860d9e94a3a79 100644
+--- a/src/main/java/com/github/claudecodegui/dependency/SdkDefinition.java
++++ b/src/main/java/com/github/claudecodegui/dependency/SdkDefinition.java
+@@ -30,11 +30,11 @@ public enum SdkDefinition {
+         "codex-sdk",
+         "Codex SDK",
+         "@openai/codex-sdk",
+-        "latest",
++        "0.148.0",
+         Collections.emptyList(),
+-        Arrays.asList("0.117.0", "0.116.0", "0.115.0"),
++        Collections.singletonList("0.148.0"),
+         "Codex AI 提供商所需。",
+-        null // minRequiredVersion — no enforced minimum
++        "0.148.0" // minRequiredVersion — App Server thread/fork requires lastTurnId support
+     );
+ 
+     private final String id;
+@@ -89,7 +89,8 @@ public enum SdkDefinition {
+ 
+     /**
+      * Minimum installed version required for full feature support.
+-     * The Claude SDK needs 0.3.182 or later for the Fable tier; Codex has no minimum.
++     * The Claude SDK needs 0.3.182 or later for the Fable tier. Codex needs
++     * 0.148.0 or later for reliable App Server thread forks through lastTurnId.
+      * Null means no minimum is enforced.
+      */
+     public String getMinRequiredVersion() {
 diff --git a/src/main/java/com/github/claudecodegui/handler/history/HistoryMessageInjector.java b/src/main/java/com/github/claudecodegui/handler/history/HistoryMessageInjector.java
-index fee7101e..cecf2ec2 100644
+index fee7101e923a81defd870ed1a7594681dcee3475..cecf2ec25f633c314660e6e065d443ef9ecf93ad 100644
 --- a/src/main/java/com/github/claudecodegui/handler/history/HistoryMessageInjector.java
 +++ b/src/main/java/com/github/claudecodegui/handler/history/HistoryMessageInjector.java
 @@ -27,6 +27,7 @@ import java.util.Base64;
@@ -1999,7 +4156,7 @@ index fee7101e..cecf2ec2 100644
       * Extracts a provider-reported Codex context snapshot from a JSONL token_count record.
       * Only last_token_usage represents the active model context. Session-cumulative
 diff --git a/src/main/java/com/github/claudecodegui/provider/codex/CodexSDKBridge.java b/src/main/java/com/github/claudecodegui/provider/codex/CodexSDKBridge.java
-index 87afb53d..34d51689 100644
+index 87afb53d00a1e7a3d0148ca3c80af32502091fa4..34d51689115ea05490ae130dca89ef550eaab732 100644
 --- a/src/main/java/com/github/claudecodegui/provider/codex/CodexSDKBridge.java
 +++ b/src/main/java/com/github/claudecodegui/provider/codex/CodexSDKBridge.java
 @@ -38,6 +38,7 @@ import java.util.concurrent.atomic.AtomicReference;
@@ -2035,7 +4192,7 @@ index 87afb53d..34d51689 100644
              LOG.warn("Failed to load Codex session history: " + e.getMessage(), e);
              return List.of();
 diff --git a/src/main/java/com/github/claudecodegui/session/CallbackHandler.java b/src/main/java/com/github/claudecodegui/session/CallbackHandler.java
-index 28c819dd..432843c4 100644
+index 28c819ddcf702e045dfd77abcad9dd43f1cb1179..432843c4f8ce4787c64e880f23d3c036f589a5b3 100644
 --- a/src/main/java/com/github/claudecodegui/session/CallbackHandler.java
 +++ b/src/main/java/com/github/claudecodegui/session/CallbackHandler.java
 @@ -42,6 +42,12 @@ public class CallbackHandler {
@@ -2052,7 +4209,7 @@ index 28c819dd..432843c4 100644
       * Notify that a session ID was received.
       */
 diff --git a/src/main/java/com/github/claudecodegui/session/ClaudeSession.java b/src/main/java/com/github/claudecodegui/session/ClaudeSession.java
-index 941f4611..7514fdf2 100644
+index 941f46118eb1f987b99e79839a0d1169f137684f..7514fdf2cf39c525aca58f0d73a07ecc736a82da 100644
 --- a/src/main/java/com/github/claudecodegui/session/ClaudeSession.java
 +++ b/src/main/java/com/github/claudecodegui/session/ClaudeSession.java
 @@ -114,6 +114,9 @@ public class ClaudeSession {
@@ -2066,7 +4223,7 @@ index 941f4611..7514fdf2 100644
  
          void onPermissionRequested(PermissionRequest request);
 diff --git a/src/main/java/com/github/claudecodegui/session/CodexMessageHandler.java b/src/main/java/com/github/claudecodegui/session/CodexMessageHandler.java
-index 42c2b8e9..0abbcafa 100644
+index 42c2b8e9f8b7f0d313e74fdb09cbdaf52c525c27..0abbcafac56239a545b4d5ebb24958b705719004 100644
 --- a/src/main/java/com/github/claudecodegui/session/CodexMessageHandler.java
 +++ b/src/main/java/com/github/claudecodegui/session/CodexMessageHandler.java
 @@ -8,8 +8,12 @@ import com.github.claudecodegui.util.UsageCostCalculator;
@@ -2215,7 +4372,7 @@ index 42c2b8e9..0abbcafa 100644
       * Handle a complete assistant message in JSON format.
       * Contains thinking, tool_use, text, and other content types.
 diff --git a/src/main/java/com/github/claudecodegui/session/SessionCallbackAdapter.java b/src/main/java/com/github/claudecodegui/session/SessionCallbackAdapter.java
-index 3af159f3..4fabea6f 100644
+index 3af159f3bf60445e1787e22a23259799b0cf0f98..4fabea6ff60971c2eb99d0b94c5050c2efe9dedc 100644
 --- a/src/main/java/com/github/claudecodegui/session/SessionCallbackAdapter.java
 +++ b/src/main/java/com/github/claudecodegui/session/SessionCallbackAdapter.java
 @@ -3,6 +3,9 @@ package com.github.claudecodegui.session;
@@ -2422,7 +4579,7 @@ index 3af159f3..4fabea6f 100644
      }
  
 diff --git a/src/main/java/com/github/claudecodegui/session/StreamMessageCoalescer.java b/src/main/java/com/github/claudecodegui/session/StreamMessageCoalescer.java
-index 37059022..5d330f08 100644
+index 370590224b00844d9544d1b3d13b824cbee4a8b8..5d330f08413f4180d87e147e5bad64a8ed0a553e 100644
 --- a/src/main/java/com/github/claudecodegui/session/StreamMessageCoalescer.java
 +++ b/src/main/java/com/github/claudecodegui/session/StreamMessageCoalescer.java
 @@ -100,7 +100,9 @@ public class StreamMessageCoalescer {
@@ -2526,7 +4683,7 @@ index 37059022..5d330f08 100644
  
      private static boolean hasSamePrefix(List<ClaudeSession.Message> previousMessages,
 diff --git a/src/main/java/com/github/claudecodegui/ui/ChatWindowDelegate.java b/src/main/java/com/github/claudecodegui/ui/ChatWindowDelegate.java
-index 6c53c571..50645112 100644
+index 6c53c571e3ebacafd69c7145631806eed1847047..50645112aff384cc8cdcb62e34f04e0a8acf1735 100644
 --- a/src/main/java/com/github/claudecodegui/ui/ChatWindowDelegate.java
 +++ b/src/main/java/com/github/claudecodegui/ui/ChatWindowDelegate.java
 @@ -107,6 +107,7 @@ public class ChatWindowDelegate {
@@ -2550,7 +4707,7 @@ index 6c53c571..50645112 100644
                      + (sessionId != null ? sessionId : "(none)")
                      + ", messages=" + messages.size()
 diff --git a/src/main/java/com/github/claudecodegui/ui/toolwindow/ClaudeChatWindow.java b/src/main/java/com/github/claudecodegui/ui/toolwindow/ClaudeChatWindow.java
-index a7447259..1c474ad3 100644
+index a744725961bbfcdc834121a778d9025872d957a3..1c474ad3a891c3a9765883640fd70ea064882864 100644
 --- a/src/main/java/com/github/claudecodegui/ui/toolwindow/ClaudeChatWindow.java
 +++ b/src/main/java/com/github/claudecodegui/ui/toolwindow/ClaudeChatWindow.java
 @@ -3119,6 +3119,13 @@ public class ClaudeChatWindow {
@@ -2567,8 +4724,33 @@ index a7447259..1c474ad3 100644
              @Override
              public void setFrontendReady(boolean ready) {
                  updateFrontendReadyState(ready);
+diff --git a/src/test/java/com/github/claudecodegui/dependency/DependencyManagerVersioningTest.java b/src/test/java/com/github/claudecodegui/dependency/DependencyManagerVersioningTest.java
+index fa95e913e6606515b8ccbcda3ef8df20e5daf57b..faa5ab3fae75c99a9416fd8091dcee8e356b2fc8 100644
+--- a/src/test/java/com/github/claudecodegui/dependency/DependencyManagerVersioningTest.java
++++ b/src/test/java/com/github/claudecodegui/dependency/DependencyManagerVersioningTest.java
+@@ -27,7 +27,7 @@ public class DependencyManagerVersioningTest {
+                 " "
+         );
+ 
+-        assertEquals("@openai/codex-sdk@latest", packages.get(0));
++        assertEquals("@openai/codex-sdk@0.148.0", packages.get(0));
+     }
+ 
+     @Test
+@@ -68,7 +68,9 @@ public class DependencyManagerVersioningTest {
+     }
+ 
+     @Test
+-    public void codexSdkShouldHaveNoEnforcedMinimumVersion() {
+-        assertNull(SdkDefinition.CODEX_SDK.getMinRequiredVersion());
++    public void codexSdkShouldRequireAppServerForkProtocolVersion() {
++        assertEquals("0.148.0", SdkDefinition.CODEX_SDK.getMinRequiredVersion());
++        assertEquals("@openai/codex-sdk@0.148.0", SdkDefinition.CODEX_SDK.getFullPackageSpec());
++        assertEquals(List.of("0.148.0"), SdkDefinition.CODEX_SDK.getFallbackVersions());
+     }
+ }
 diff --git a/src/test/java/com/github/claudecodegui/provider/codex/CodexSDKBridgeHistoryTest.java b/src/test/java/com/github/claudecodegui/provider/codex/CodexSDKBridgeHistoryTest.java
-index 4149893b..d1a29786 100644
+index 4149893b0878b473234c6774dc7008f5d039331c..d1a2978622b787aac0cca307e710fc5aa770f2f0 100644
 --- a/src/test/java/com/github/claudecodegui/provider/codex/CodexSDKBridgeHistoryTest.java
 +++ b/src/test/java/com/github/claudecodegui/provider/codex/CodexSDKBridgeHistoryTest.java
 @@ -47,6 +47,82 @@ public class CodexSDKBridgeHistoryTest {
@@ -2655,7 +4837,7 @@ index 4149893b..d1a29786 100644
      public void getSessionMessagesPreservesToolResultForAutoRestore() throws IOException {
          Path sessionsDir = Files.createTempDirectory("codex-sdk-bridge-history-tool-result");
 diff --git a/src/test/java/com/github/claudecodegui/provider/codex/CodexSDKBridgeProtocolTest.java b/src/test/java/com/github/claudecodegui/provider/codex/CodexSDKBridgeProtocolTest.java
-index 9509cd8d..a264cc63 100644
+index 9509cd8daf5e918f08e75c49dffaa2188a9b1a69..a264cc63f9b097fe1e47b4066bde9e16e4c58655 100644
 --- a/src/test/java/com/github/claudecodegui/provider/codex/CodexSDKBridgeProtocolTest.java
 +++ b/src/test/java/com/github/claudecodegui/provider/codex/CodexSDKBridgeProtocolTest.java
 @@ -38,6 +38,26 @@ public class CodexSDKBridgeProtocolTest {
@@ -2686,7 +4868,7 @@ index 9509cd8d..a264cc63 100644
          private void process(String line, MessageCallback callback, SDKResult result) {
              processOutputLine(
 diff --git a/src/test/java/com/github/claudecodegui/session/CodexMessageHandlerTest.java b/src/test/java/com/github/claudecodegui/session/CodexMessageHandlerTest.java
-index 67147bce..4b61c37c 100644
+index 67147bce06614f026bb9a282b1d14051c5bc2491..4b61c37c003b2f9b3980a5076de1bda7baf41fb2 100644
 --- a/src/test/java/com/github/claudecodegui/session/CodexMessageHandlerTest.java
 +++ b/src/test/java/com/github/claudecodegui/session/CodexMessageHandlerTest.java
 @@ -31,6 +31,7 @@ public class CodexMessageHandlerTest {
@@ -2755,7 +4937,7 @@ index 67147bce..4b61c37c 100644
      public void contentDeltaIsForwardedToFrontendStreamingCallback() {
          SessionState state = new SessionState();
 diff --git a/src/test/java/com/github/claudecodegui/session/SessionCallbackAdapterUsageTest.java b/src/test/java/com/github/claudecodegui/session/SessionCallbackAdapterUsageTest.java
-index 1304649e..7392b1aa 100644
+index 1304649ec2facce1732c19f15f7a3bb60b37a63d..7392b1aa54cc61ff4eae5850bcdc9242dd590d64 100644
 --- a/src/test/java/com/github/claudecodegui/session/SessionCallbackAdapterUsageTest.java
 +++ b/src/test/java/com/github/claudecodegui/session/SessionCallbackAdapterUsageTest.java
 @@ -1,14 +1,104 @@
@@ -2864,7 +5046,7 @@ index 1304649e..7392b1aa 100644
      public void normalizeUsageValueRejectsNegativeValues() {
          assertEquals(0, SessionCallbackAdapter.normalizeUsageValue(-1));
 diff --git a/src/test/java/com/github/claudecodegui/session/StreamMessageCoalescerStreamEndHookTest.java b/src/test/java/com/github/claudecodegui/session/StreamMessageCoalescerStreamEndHookTest.java
-index 11263499..b418b902 100644
+index 112634999404d9fdb8d44bec608cba85a0671e7f..b418b9022b0c51375f4b79f91986da22f2cd5e6c 100644
 --- a/src/test/java/com/github/claudecodegui/session/StreamMessageCoalescerStreamEndHookTest.java
 +++ b/src/test/java/com/github/claudecodegui/session/StreamMessageCoalescerStreamEndHookTest.java
 @@ -10,6 +10,7 @@ import java.util.concurrent.atomic.AtomicInteger;
@@ -2958,7 +5140,7 @@ index 11263499..b418b902 100644
          List<ClaudeSession.Message> messages = new ArrayList<>();
          for (int i = 0; i < count; i++) {
 diff --git a/src/test/java/com/github/claudecodegui/ui/ChatWindowDelegateTest.java b/src/test/java/com/github/claudecodegui/ui/ChatWindowDelegateTest.java
-index cfc0d9a4..639f0a2a 100644
+index cfc0d9a4430e7ef7bc0c29af3330ea90018f3db4..639f0a2aa5eb5ca74a1b106c1209043008660f43 100644
 --- a/src/test/java/com/github/claudecodegui/ui/ChatWindowDelegateTest.java
 +++ b/src/test/java/com/github/claudecodegui/ui/ChatWindowDelegateTest.java
 @@ -89,6 +89,23 @@ public class ChatWindowDelegateTest {
@@ -3010,7 +5192,7 @@ index cfc0d9a4..639f0a2a 100644
                                      javaScriptCalls.add((String) args[0]);
                                      return null;
 diff --git a/webview/src/App.tsx b/webview/src/App.tsx
-index 9bf73aba..ba5b0d31 100644
+index 9bf73aba1746df004d1bbee146f03006447bc08a..ba5b0d317068cdde3233a14ad51d1f42ac60b40b 100644
 --- a/webview/src/App.tsx
 +++ b/webview/src/App.tsx
 @@ -73,7 +73,7 @@ const App = () => {
@@ -3032,7 +5214,7 @@ index 9bf73aba..ba5b0d31 100644
      setCurrentSessionId, setUsagePercentage, setUsageUsedTokens, setUsageMaxTokens,
      setPermissionMode, setCurrentProvider, setClaudePermissionMode, setCodexPermissionMode,
 diff --git a/webview/src/components/ChatScreen.tsx b/webview/src/components/ChatScreen.tsx
-index 1723b1fa..5b8c418e 100644
+index 1723b1fad73d2abe295ea2d21ced08c9f53fdb9a..5b8c418eb8b8ff39c95bf4f3183cb455e85e48cd 100644
 --- a/webview/src/components/ChatScreen.tsx
 +++ b/webview/src/components/ChatScreen.tsx
 @@ -7,6 +7,7 @@ import type {
@@ -3071,7 +5253,7 @@ index 1723b1fa..5b8c418e 100644
  
        <StatusPanelErrorBoundary>
 diff --git a/webview/src/components/MessageList.test.tsx b/webview/src/components/MessageList.test.tsx
-index 17ebf125..0084887a 100644
+index 17ebf1256724209a918dc78867cb1deaeb57f6b5..0084887a8488ede31a33dcf0dc3fcbd11365dcb8 100644
 --- a/webview/src/components/MessageList.test.tsx
 +++ b/webview/src/components/MessageList.test.tsx
 @@ -462,4 +462,32 @@ describe('MessageList container behaviour', () => {
@@ -3108,7 +5290,7 @@ index 17ebf125..0084887a 100644
 +  });
  });
 diff --git a/webview/src/components/MessageList.tsx b/webview/src/components/MessageList.tsx
-index 399658c9..a858775d 100644
+index 399658c9365b3946e7471a666c63cf9622ff42c2..a858775d0f2c57393f042f9f06146bf4ea28b689 100644
 --- a/webview/src/components/MessageList.tsx
 +++ b/webview/src/components/MessageList.tsx
 @@ -4,6 +4,7 @@ import type { ClaudeMessage, ClaudeContentBlock, CodexHistoryPageInfo, ToolResul
@@ -3148,7 +5330,7 @@ index 399658c9..a858775d 100644
    );
 diff --git a/webview/src/components/RetryStatusStrip.test.tsx b/webview/src/components/RetryStatusStrip.test.tsx
 new file mode 100644
-index 00000000..8a65530c
+index 0000000000000000000000000000000000000000..8a65530cc3d5a99a099146cac13d6f5f2747a15c
 --- /dev/null
 +++ b/webview/src/components/RetryStatusStrip.test.tsx
 @@ -0,0 +1,43 @@
@@ -3197,7 +5379,7 @@ index 00000000..8a65530c
 +});
 diff --git a/webview/src/components/RetryStatusStrip.tsx b/webview/src/components/RetryStatusStrip.tsx
 new file mode 100644
-index 00000000..ba4691cd
+index 0000000000000000000000000000000000000000..ba4691cdddcc364d4712724bbb6715ad90cb5bff
 --- /dev/null
 +++ b/webview/src/components/RetryStatusStrip.tsx
 @@ -0,0 +1,20 @@
@@ -3223,7 +5405,7 @@ index 00000000..ba4691cd
 +export default RetryStatusStrip;
 diff --git a/webview/src/components/WaitingIndicator.test.tsx b/webview/src/components/WaitingIndicator.test.tsx
 new file mode 100644
-index 00000000..3974da18
+index 0000000000000000000000000000000000000000..3974da1822abb443896d4ec0f91d0eb71a9ec058
 --- /dev/null
 +++ b/webview/src/components/WaitingIndicator.test.tsx
 @@ -0,0 +1,86 @@
@@ -3314,7 +5496,7 @@ index 00000000..3974da18
 +  });
 +});
 diff --git a/webview/src/components/WaitingIndicator.tsx b/webview/src/components/WaitingIndicator.tsx
-index bfd41eb8..0510586b 100644
+index bfd41eb8d6fa066607093100e6add0df893dcb37..0510586b202ec5860fa18c8b8b1bebf5a34850cd 100644
 --- a/webview/src/components/WaitingIndicator.tsx
 +++ b/webview/src/components/WaitingIndicator.tsx
 @@ -1,13 +1,24 @@
@@ -3416,7 +5598,7 @@ index bfd41eb8..0510586b 100644
  export default WaitingIndicator;
 -
 diff --git a/webview/src/contexts/MessagesContext.tsx b/webview/src/contexts/MessagesContext.tsx
-index e71c53d6..3003f8c5 100644
+index e71c53d6826a0a5d29bdc90becb7a0d6431d9d22..3003f8c5787ea3a67289ce11f19743ed11450748 100644
 --- a/webview/src/contexts/MessagesContext.tsx
 +++ b/webview/src/contexts/MessagesContext.tsx
 @@ -3,6 +3,20 @@ import type { ClaudeMessage, SubagentHistoryResponse } from '../types';
@@ -3474,7 +5656,7 @@ index e71c53d6..3003f8c5 100644
  
    return <MessagesContext.Provider value={value}>{children}</MessagesContext.Provider>;
 diff --git a/webview/src/global.d.ts b/webview/src/global.d.ts
-index e626fb1e..847135d7 100644
+index e626fb1ed20243a2171caf57b44d6f864650aef9..847135d7f91f32a2ab1549b646bf7aca560fddd1 100644
 --- a/webview/src/global.d.ts
 +++ b/webview/src/global.d.ts
 @@ -36,6 +36,8 @@ interface Window {
@@ -3505,7 +5687,7 @@ index e626fb1e..847135d7 100644
    __cancelPendingUpdateMessages?: () => void;
  
 diff --git a/webview/src/hooks/useWindowCallbacks.test.ts b/webview/src/hooks/useWindowCallbacks.test.ts
-index 4ff94336..9db7d026 100644
+index 4ff9433604080285a7f86b300165887373e03025..9db7d026c53c90338b2af7d4775019270bd27483 100644
 --- a/webview/src/hooks/useWindowCallbacks.test.ts
 +++ b/webview/src/hooks/useWindowCallbacks.test.ts
 @@ -30,6 +30,7 @@ describe('useWindowCallbacks integration', () => {
@@ -3864,7 +6046,7 @@ index 4ff94336..9db7d026 100644
  
    // ===== clearMessages forces a webview repaint to clear JCEF ghosting =====
 diff --git a/webview/src/hooks/useWindowCallbacks.ts b/webview/src/hooks/useWindowCallbacks.ts
-index 195854f9..fa130440 100644
+index 195854f9d42d0b384ba87737ba3b6b28e0303743..fa1304408f306fb40dbe24f67df5ce123e9b9f90 100644
 --- a/webview/src/hooks/useWindowCallbacks.ts
 +++ b/webview/src/hooks/useWindowCallbacks.ts
 @@ -15,6 +15,7 @@ import type { PlanApprovalRequest } from '../components/PlanApprovalDialog';
@@ -3884,7 +6066,7 @@ index 195854f9..fa130440 100644
    setExpandedThinking?: React.Dispatch<React.SetStateAction<Record<string, boolean>>>;
    setStreamingActive: React.Dispatch<React.SetStateAction<boolean>>;
 diff --git a/webview/src/hooks/windowCallbacks/registerCallbacks.ts b/webview/src/hooks/windowCallbacks/registerCallbacks.ts
-index 926677cf..7fdf7a00 100644
+index 926677cfedc4cf5fcce8f1df50a176c311a04e5e..7fdf7a00c1335e3149fa161354fef273adc6c2ec 100644
 --- a/webview/src/hooks/windowCallbacks/registerCallbacks.ts
 +++ b/webview/src/hooks/windowCallbacks/registerCallbacks.ts
 @@ -72,6 +72,7 @@ export function registerWindowCallbacks(
@@ -3896,7 +6078,7 @@ index 926677cf..7fdf7a00 100644
      setStreamingActive: options.setStreamingActive,
      isStreamingRef: options.isStreamingRef,
 diff --git a/webview/src/hooks/windowCallbacks/registerCallbacks/messageCallbacks.ts b/webview/src/hooks/windowCallbacks/registerCallbacks/messageCallbacks.ts
-index c7561d08..87bfa5aa 100644
+index c7561d08ed87b5f74c2254cc75bfa765e8fffabb..87bfa5aa55a1013698bc0520f39470639959ed8c 100644
 --- a/webview/src/hooks/windowCallbacks/registerCallbacks/messageCallbacks.ts
 +++ b/webview/src/hooks/windowCallbacks/registerCallbacks/messageCallbacks.ts
 @@ -9,6 +9,7 @@
@@ -4177,7 +6359,7 @@ index c7561d08..87bfa5aa 100644
            && isStreamingRef.current
            && streamingMessageIndexRef.current >= 0) {
 diff --git a/webview/src/hooks/windowCallbacks/registerCallbacks/streamingCallbacks.ts b/webview/src/hooks/windowCallbacks/registerCallbacks/streamingCallbacks.ts
-index 1b971fe7..8dc3e460 100644
+index 1b971fe764a352a172b941402d78d95389f24bf5..8dc3e460c5496b2bb6ea609809d203a8a29fa6e0 100644
 --- a/webview/src/hooks/windowCallbacks/registerCallbacks/streamingCallbacks.ts
 +++ b/webview/src/hooks/windowCallbacks/registerCallbacks/streamingCallbacks.ts
 @@ -194,6 +194,7 @@ export function registerStreamingCallbacks(options: UseWindowCallbacksOptions):
@@ -4213,7 +6395,7 @@ index 1b971fe7..8dc3e460 100644
      // Idempotency guard: dual-path delivery (primary via flush callback +
      // fallback via Alarm) may send onStreamEnd twice for the same turn.
 diff --git a/webview/src/hooks/windowCallbacks/sessionTransition.ts b/webview/src/hooks/windowCallbacks/sessionTransition.ts
-index 30a4a9cb..10a85f10 100644
+index 30a4a9cbca9439d60e77a9412c3490adfeab4c4c..10a85f10a447ec7fc16392b5d68b1eddc50087b4 100644
 --- a/webview/src/hooks/windowCallbacks/sessionTransition.ts
 +++ b/webview/src/hooks/windowCallbacks/sessionTransition.ts
 @@ -8,12 +8,14 @@
@@ -4240,7 +6422,7 @@ index 30a4a9cb..10a85f10 100644
      opts.setStreamingActive(false);
      opts.isStreamingRef.current = false;
 diff --git a/webview/src/i18n/locales/en.json b/webview/src/i18n/locales/en.json
-index 25641556..f16ecd35 100644
+index 25641556cbcd76e76c13347a752c2d1302df45fc..f16ecd3501ec8ad075d82c4f677b9658a6cbc1b4 100644
 --- a/webview/src/i18n/locales/en.json
 +++ b/webview/src/i18n/locales/en.json
 @@ -68,6 +68,11 @@
@@ -4256,7 +6438,7 @@ index 25641556..f16ecd35 100644
      "imagePreview": "Preview",
      "context": "Context",
 diff --git a/webview/src/i18n/locales/es.json b/webview/src/i18n/locales/es.json
-index 02d6b1d9..2638557c 100644
+index 02d6b1d94b682e2f0e4c9f01ba9658445c36c3ae..2638557c65ac6acac06dd39a0df2910588579218 100644
 --- a/webview/src/i18n/locales/es.json
 +++ b/webview/src/i18n/locales/es.json
 @@ -51,6 +51,11 @@
@@ -4272,7 +6454,7 @@ index 02d6b1d9..2638557c 100644
      "imagePreview": "Vista previa",
      "context": "Contexto",
 diff --git a/webview/src/i18n/locales/fr.json b/webview/src/i18n/locales/fr.json
-index c09907b5..ff4fad78 100644
+index c09907b5e00555a24c88bf20fa7563e4dbed55a1..ff4fad78c8ce61f2ec2d9ed2b31b512b266256f9 100644
 --- a/webview/src/i18n/locales/fr.json
 +++ b/webview/src/i18n/locales/fr.json
 @@ -51,6 +51,11 @@
@@ -4288,7 +6470,7 @@ index c09907b5..ff4fad78 100644
      "imagePreview": "Aperçu",
      "context": "Contexte",
 diff --git a/webview/src/i18n/locales/hi.json b/webview/src/i18n/locales/hi.json
-index e92bd858..9b23b835 100644
+index e92bd8583973efa70f84942c9e7976dcd7f45315..9b23b83573a500733a5c16e5ff722fa9ace3d6e1 100644
 --- a/webview/src/i18n/locales/hi.json
 +++ b/webview/src/i18n/locales/hi.json
 @@ -51,6 +51,11 @@
@@ -4304,7 +6486,7 @@ index e92bd858..9b23b835 100644
      "imagePreview": "पूर्वावलोकन",
      "context": "संदर्भ",
 diff --git a/webview/src/i18n/locales/ja.json b/webview/src/i18n/locales/ja.json
-index 75d24055..de6a70e0 100644
+index 75d24055d8a580ed9f33c69883aad9befeb60e9f..de6a70e0d949d019ce6075e53351153a9488491a 100644
 --- a/webview/src/i18n/locales/ja.json
 +++ b/webview/src/i18n/locales/ja.json
 @@ -51,6 +51,11 @@
@@ -4320,7 +6502,7 @@ index 75d24055..de6a70e0 100644
      "imagePreview": "プレビュー",
      "context": "コンテキスト",
 diff --git a/webview/src/i18n/locales/ko.json b/webview/src/i18n/locales/ko.json
-index 3cd78903..71132c6d 100644
+index 3cd7890340a8a57d1095f41b2c286a6be4d95066..71132c6de019690c32ec4f0c50e7fa748f5eaec8 100644
 --- a/webview/src/i18n/locales/ko.json
 +++ b/webview/src/i18n/locales/ko.json
 @@ -51,6 +51,11 @@
@@ -4336,7 +6518,7 @@ index 3cd78903..71132c6d 100644
      "imagePreview": "미리보기",
      "context": "컨텍스트",
 diff --git a/webview/src/i18n/locales/pt-BR.json b/webview/src/i18n/locales/pt-BR.json
-index 4a3d3aae..159a25eb 100644
+index 4a3d3aae4d285bc47c96b8eda9445d3ba44f8543..159a25ebd39dc0ff7ab7651f367a8892632d0914 100644
 --- a/webview/src/i18n/locales/pt-BR.json
 +++ b/webview/src/i18n/locales/pt-BR.json
 @@ -51,6 +51,11 @@
@@ -4352,7 +6534,7 @@ index 4a3d3aae..159a25eb 100644
      "imagePreview": "Visualização",
      "context": "Contexto",
 diff --git a/webview/src/i18n/locales/ru.json b/webview/src/i18n/locales/ru.json
-index 9d26b015..4e18bfd3 100644
+index 9d26b015e5d4139f89064a4406cb34eaa32a05b1..4e18bfd388f634642ea81143b9f532d8db070c74 100644
 --- a/webview/src/i18n/locales/ru.json
 +++ b/webview/src/i18n/locales/ru.json
 @@ -51,6 +51,11 @@
@@ -4368,7 +6550,7 @@ index 9d26b015..4e18bfd3 100644
      "imagePreview": "Предпросмотр",
      "context": "Контекст",
 diff --git a/webview/src/i18n/locales/zh-TW.json b/webview/src/i18n/locales/zh-TW.json
-index 971c7f67..1048f4f9 100644
+index 971c7f675c92068598864991f4686027ccb15ca2..1048f4f964b79b5d1d56545bcef7982714814929 100644
 --- a/webview/src/i18n/locales/zh-TW.json
 +++ b/webview/src/i18n/locales/zh-TW.json
 @@ -51,6 +51,11 @@
@@ -4384,7 +6566,7 @@ index 971c7f67..1048f4f9 100644
      "imagePreview": "預覽",
      "context": "上下文",
 diff --git a/webview/src/i18n/locales/zh.json b/webview/src/i18n/locales/zh.json
-index 7292a409..e34b8cea 100644
+index 7292a409fc0c498579f00d02fd60b8e94a0cf992..e34b8cea3292e8fe435521a9907c975f65523b5e 100644
 --- a/webview/src/i18n/locales/zh.json
 +++ b/webview/src/i18n/locales/zh.json
 @@ -68,6 +68,11 @@
@@ -4400,7 +6582,7 @@ index 7292a409..e34b8cea 100644
      "imagePreview": "预览",
      "context": "上下文",
 diff --git a/webview/src/styles/less/components/loading.less b/webview/src/styles/less/components/loading.less
-index 8e4caaba..33f11489 100644
+index 8e4caaba7a94f2aa61b1d72b9857f31d89f66271..33f1148980dd6b2ad1b1905fa40e3dce9f904911 100644
 --- a/webview/src/styles/less/components/loading.less
 +++ b/webview/src/styles/less/components/loading.less
 @@ -38,6 +38,27 @@

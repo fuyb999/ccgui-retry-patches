@@ -8,7 +8,7 @@ hash set, and ordered Git patch list. Patches are never applied across versions.
 
 | CC GUI | Upstream commit | Patch artifact |
 | --- | --- | --- |
-| `v0.5.2` | `077cccff6707c11796fb0fbd3445b66abd97f83e` | `dist/ccgui-0.5.2-retry.5.zip` |
+| `v0.5.2` | `077cccff6707c11796fb0fbd3445b66abd97f83e` | `dist/ccgui-0.5.2-retry.6.zip` |
 | `v0.5` | `76247b2001c17ff4de28b98458b5e7ed0860962e` | `dist/ccgui-0.5-retry.4.zip` |
 
 ## Retry Policy
@@ -29,9 +29,30 @@ dash variants) or `message=daily usage limit exceeded`. Explicit daily-limit
 evidence takes precedence over generic rate-limit evidence. Other errors are
 terminal unless a version-specific patch explicitly adds and tests them.
 
-Every retry creates a fresh turn `AbortController` and SDK event stream while
-reusing the same thread object, input, and logical output state. Retry progress
-is emitted as a dedicated `[CODEX_RETRY]` event. The event is sanitized before
+For an existing conversation, the bridge reads its persisted turns before the
+new request and freezes the ID of the last `completed` turn. A clean source
+runs the first request normally. If the source already has failed, interrupted,
+or still-running turns after that boundary, as can happen after an IDE or bridge
+restart, the first outbound request is forked before submission. Every later
+retry also uses Codex App Server `thread/fork` with both the original thread ID
+and that immutable `lastTurnId`. The returned child ID is resumed through the
+TypeScript SDK to retain the existing structured event format. A failed child
+is deleted with `thread/delete` before another child can be created. Its ID is
+kept inside the bridge and is never sent to Java or persisted by the tab. Only
+a child whose event stream reaches `turn.completed` and closes normally is
+published as the GUI conversation. The stable source is not deleted because
+App Server deletion also removes descendants. See the official protocol at
+<https://learn.chatgpt.com/docs/app-server>.
+
+New conversations and source threads with no completed turn use a distinct
+`codex.startThread()` instance for every attempt. They never retry on the
+failed source. This reliable fork protocol requires `@openai/codex-sdk` and its
+bundled CLI at version `0.148.0` or newer; the `v0.5.2` patch pins and enforces
+`0.148.0` instead of silently falling back to same-thread retry.
+
+Every retry also creates a fresh turn `AbortController` and SDK event stream
+while preserving the input and logical GUI output state. Retry progress is
+emitted as a dedicated `[CODEX_RETRY]` event. The event is sanitized before
 crossing the IDEA/WebView boundary and contains only a retry phase, attempt
 number, absolute retry deadline, and an allowlisted category/status/code reason.
 Arbitrary upstream error messages never cross the retry progress bridge. While
@@ -77,6 +98,12 @@ active turns. Set `CCGUI_CODEX_INACTIVITY_TIMEOUT_MS` to a positive integer to
 override the 600,000 ms default. Invalid, zero, and negative values use the
 default.
 
+An SDK stream that closes without `turn.completed` is also treated as a
+retryable server failure. Its branch is deleted through the same cleanup
+barrier instead of being persisted as a successful but incomplete session.
+App Server stderr is continuously drained without retaining or forwarding its
+contents, preventing a noisy local process from blocking its RPC pipe.
+
 While an SDK event is pending, the `v0.5.2` bridge scans the current-turn
 session JSONL every three seconds. Reasoning summaries and tool records found
 there are forwarded in source order, so retry or compaction cannot leave the UI
@@ -92,8 +119,17 @@ attempt and a pending delay and are never retried.
 Retries, including inactivity retries, remain enabled after partial assistant
 output or tool activity. A failed or apparently inactive attempt may already
 have run commands, edited files, called MCP tools, or caused other external side
-effects. A later attempt can repeat those effects. The bridge does not roll
-anything back.
+effects. Forking prevents failed Codex turns from entering the next model
+context, but it cannot roll back the workspace, processes, network requests,
+database writes, or external MCP systems.
+
+After tool activity is observed, the next attempt receives a recovery
+instruction telling it to inspect current state and avoid repeating completed
+actions. This reduces duplicate effects but does not provide exactly-once
+execution. An App Server process failure after a fork is committed but before
+its child ID is received can also leave an unidentified local child thread;
+the protocol has no idempotency key that would make that narrow case
+transactional.
 
 This patch handles SDK failures and thrown request/stream errors. It does not
 parse textual `<subagent_notification>` content or recreate a failed subagent
@@ -143,15 +179,28 @@ embedded WebView retry UI, and bridge:
 rtk scripts/verify.sh v0.5.2
 ```
 
+Verify the installed Codex `0.148.0` App Server fork semantics against a local
+completed session without printing transcript content:
+
+```bash
+rtk node scripts/verify-codex-fork.mjs \
+  --codex /absolute/path/to/codex
+```
+
+The script selects a suitable session unless `--thread-id` is supplied, forks
+through a completed boundary, compares turn IDs/statuses only, verifies the
+source is unchanged, and deletes the child in `finally`. Its output contains
+counts and booleans only.
+
 ## Install
 
 1. Open IDEA settings.
 2. Go to **Plugins**.
 3. Open the gear menu and choose **Install Plugin from Disk**.
-4. Select `dist/ccgui-0.5.2-retry.5.zip`.
+4. Select `dist/ccgui-0.5.2-retry.6.zip`.
 5. Restart the IDE when prompted.
 
-IDEA reports this patched build as plugin version `0.5.2-retry.5`. The scripts
+IDEA reports this patched build as plugin version `0.5.2-retry.6`. The scripts
 never overwrite the currently installed plugin.
 
 ## Add A Version
@@ -167,8 +216,9 @@ For every new CC GUI version:
    artifact verification;
 5. keep older manifests and patch directories unchanged.
 
-Generated source checkouts under `work/` and artifacts under `dist/` are ignored
-by Git. Authentication files, API keys, IDEA logs, and Codex session files must
+Generated source checkouts under `work/` are ignored by Git. Verified release
+ZIPs and checksums under `dist/` are force-tracked; intermediate build output is
+not. Authentication files, API keys, IDEA logs, and Codex session files must
 never be added to this repository.
 
 The previously installed standalone HTTP retry proxy and its user systemd unit
