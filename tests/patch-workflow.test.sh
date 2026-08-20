@@ -196,6 +196,10 @@ test_v052_patch_contains_every_created_retry_file() {
     ai-bridge/services/codex/codex-retry.js \
     ai-bridge/services/codex/codex-retry.test.js \
     ai-bridge/services/codex/message-service.retry.test.js \
+    ai-bridge/services/session-titles-service.test.cjs \
+    src/main/java/com/github/claudecodegui/session/CanonicalSessionTitleExtractor.java \
+    src/test/java/com/github/claudecodegui/session/CanonicalSessionTitleExtractorTest.java \
+    webview/src/components/ChatHeader/ChatHeader.test.tsx \
     webview/src/components/RetryStatusStrip.tsx \
     webview/src/components/RetryStatusStrip.test.tsx \
     webview/src/components/WaitingIndicator.test.tsx; do
@@ -247,10 +251,20 @@ test_retry_progress_patch_contains_bridge_and_ui_protocol() {
     fail "v0.5.2 failed branch deletion missing"
   [[ "$patch" == *"Codex SDK 0.148.0 or newer is required"* ]] || \
     fail "v0.5.2 Codex SDK compatibility guard missing"
-  [[ "$patch" == *"isToolResultOnlyUserMessage(message)"* ]] || \
-    fail "v0.5.2 tool-result title filter missing"
-  [[ "$patch" == *"skips tool-result carrier messages when choosing the first user prompt"* ]] || \
-    fail "v0.5.2 tool-result title regression test missing"
+  [[ "$patch" == *"version = '0.5.2-retry.8'"* ]] || \
+    fail "v0.5.2 retry.8 plugin version missing"
+  [[ "$patch" == *"canonical-first-user-prompt-v1"* ]] || \
+    fail "v0.5.2 canonical first-user-prompt protocol marker missing"
+  [[ "$patch" == *"firstUserPrompt"* ]] || \
+    fail "v0.5.2 canonical first-user-prompt transport missing"
+  [[ "$patch" == *"returnsTheCompleteFirstRealUserPrompt"* ]] || \
+    fail "v0.5.2 canonical prompt extractor regression test missing"
+  [[ "$patch" == *"latestCodexHistoryPageRetainsTheOriginalFirstPrompt"* ]] || \
+    fail "v0.5.2 canonical prompt history regression test missing"
+  [[ "$patch" == *"shows, edits, and saves the complete session title"* ]] || \
+    fail "v0.5.2 ChatHeader long-title regression test missing"
+  [[ "$patch" == *"ai-bridge/services/session-titles-service.test.cjs"* ]] || \
+    fail "v0.5.2 session title service regression test missing"
   [[ "$patch" != *"'exec', 'fork'"* ]] || \
     fail "v0.5.2 still contains unreliable exec fork"
 }
@@ -265,9 +279,10 @@ test_latest_release_has_versioned_retry_inputs() {
     .upstream.tag == "v0.5.2" and
     .upstream.commit == "077cccff6707c11796fb0fbd3445b66abd97f83e" and
     .pluginVersion == "0.5.2" and
-    .patchedPluginVersion == "0.5.2-retry.7" and
-    .artifact == "ccgui-0.5.2-retry.7.zip" and
-    (.tests | index("ai-bridge/services/codex/codex-fork.test.js")) != null
+    .patchedPluginVersion == "0.5.2-retry.8" and
+    .artifact == "ccgui-0.5.2-retry.8.zip" and
+    (.tests | index("ai-bridge/services/codex/codex-fork.test.js")) != null and
+    (.tests | index("ai-bridge/services/session-titles-service.test.cjs")) != null
   ' "$manifest" >/dev/null || fail "v0.5.2 manifest is not pinned to the latest release"
 }
 
@@ -282,6 +297,7 @@ test_artifact_verifier_checks_plugin_metadata_and_webview() {
     'CODEX_SESSION_POLL_INTERVAL_MS' \
     'message-tail-assistant-anchor-v1' \
     'message-tail-sparse-anchor-v2' \
+    'canonical-first-user-prompt-v1' \
     'readCodexStableBoundary' \
     'createCodexRetryAttempt' \
     'thread/fork' \

@@ -3990,7 +3990,7 @@ index 00000000..d4b654ca
 +  assert.equal(service.getTitle('session-long-title'), longTitle);
 +});
 diff --git a/build.gradle b/build.gradle
-index 264cbfc4..2cdb1638 100644
+index 264cbfc4..2852f559 100644
 --- a/build.gradle
 +++ b/build.gradle
 @@ -42,7 +42,7 @@ tasks.named('checkstyleTest') {
@@ -3998,7 +3998,7 @@ index 264cbfc4..2cdb1638 100644
  
  group = 'com.github.idea-claude-code-gui'
 -version = '0.5.2'
-+version = '0.5.2-retry.7'
++version = '0.5.2-retry.8'
  
  java {
      sourceCompatibility = JavaVersion.VERSION_17
@@ -6273,7 +6273,7 @@ index a009491e..63fb9ffe 100644
  
    return <SessionContext.Provider value={value}>{children}</SessionContext.Provider>;
 diff --git a/webview/src/global.d.ts b/webview/src/global.d.ts
-index e626fb1e..af50d5fe 100644
+index e626fb1e..f74d4f6c 100644
 --- a/webview/src/global.d.ts
 +++ b/webview/src/global.d.ts
 @@ -30,12 +30,19 @@ interface Window {
@@ -6323,7 +6323,7 @@ index e626fb1e..af50d5fe 100644
    /** Cancel pending rAF-deferred updateMessages (set by messageCallbacks, called by onStreamEnd). */
    __cancelPendingUpdateMessages?: () => void;
  
-@@ -1013,7 +1025,11 @@ interface Window {
+@@ -1013,7 +1025,12 @@ interface Window {
    /**
     * Pending updateMessages payload before React initialization
     */
@@ -6332,6 +6332,7 @@ index e626fb1e..af50d5fe 100644
 +    json: string;
 +    sequence?: number | null;
 +    firstUserPrompt?: string;
++    protocol?: 'canonical-first-user-prompt-v1';
 +  };
  
    /**
@@ -7754,7 +7755,7 @@ index 7292a409..e34b8cea 100644
      "imagePreview": "预览",
      "context": "上下文",
 diff --git a/webview/src/main.tsx b/webview/src/main.tsx
-index 1134f92e..8548f0fd 100644
+index 1134f92e..e8a18171 100644
 --- a/webview/src/main.tsx
 +++ b/webview/src/main.tsx
 @@ -506,7 +506,11 @@ if (window.__pendingLanguageConfig) {
@@ -7770,11 +7771,12 @@ index 1134f92e..8548f0fd 100644
      const parsedSequence =
        typeof sequence === 'number'
          ? sequence
-@@ -516,6 +520,7 @@ if (typeof window !== 'undefined' && !window.updateMessages) {
+@@ -516,6 +520,8 @@ if (typeof window !== 'undefined' && !window.updateMessages) {
      window.__pendingUpdateMessages = {
        json,
        sequence: Number.isFinite(parsedSequence) ? parsedSequence : null,
 +      firstUserPrompt,
++      protocol: 'canonical-first-user-prompt-v1',
      };
    };
  }

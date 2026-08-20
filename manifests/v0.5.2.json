@@ -7,13 +7,14 @@
     "commit": "077cccff6707c11796fb0fbd3445b66abd97f83e"
   },
   "pluginVersion": "0.5.2",
-  "patchedPluginVersion": "0.5.2-retry.7",
+  "patchedPluginVersion": "0.5.2-retry.8",
   "bridgeVersion": "1.0.0",
   "sourceHashes": {
     "build.gradle": "1ac8665aa2757cf76a041285c77f8dc13caef5a6f34ac184a81502e19f01af0d",
     "ai-bridge/services/codex/codex-event-handler.js": "a2bdf050089bb2ac8d07554aea469bb9e533ff995b6a17862ac88825743519b5",
     "ai-bridge/services/codex/codex-event-handler.test.js": "9605fc14bda2b4dac2623e556a5bcba85ff6992847fddad86e0781d6f23bdeee",
     "ai-bridge/services/codex/message-service.js": "63963fb93aebe746278deeeda661034452613d9abb258650d2eb01d90d062f1f",
+    "ai-bridge/services/session-titles-service.cjs": "8402687674ed4c4bd4a6806bb6ff7f729c3a7ab8b0e3d5e1002ba18efbd46f92",
     "src/main/java/com/github/claudecodegui/dependency/SdkDefinition.java": "dc9645a79b00dc2a2630f78c70a76b2ccc7f17a8d50579729169aad79942fe94",
     "src/main/java/com/github/claudecodegui/handler/history/HistoryMessageInjector.java": "7e082bf6f13fe1383eccca50fcfa56488f4d12bd7373290ebb39578b2989a37f",
     "src/main/java/com/github/claudecodegui/provider/codex/CodexSDKBridge.java": "291155db2d5481ee1c9b1402f10cec89038bf52e2722a3104c4363ee5915c046",
@@ -26,24 +27,30 @@
     "src/main/java/com/github/claudecodegui/ui/toolwindow/ClaudeChatWindow.java": "53c1900d633806d1cb30c53d7e7c9bff160c0750e08711e2bfc5536f1b1fe2f3",
     "src/test/java/com/github/claudecodegui/provider/codex/CodexSDKBridgeHistoryTest.java": "60798122b33ccccae0ffa495acc840775777a197648812f92f68c8ebefec921d",
     "src/test/java/com/github/claudecodegui/dependency/DependencyManagerVersioningTest.java": "ac5e67c12cc535ec339d86d73d03878d8c5f04d79ac86157cdd9bbe4e89136fb",
+    "src/test/java/com/github/claudecodegui/handler/history/HistoryMessageInjectorTest.java": "bdaa7599db86c2eaac09d6df278a29e9f33298c0365c70906c88fdb164a2a9b5",
     "src/test/java/com/github/claudecodegui/provider/codex/CodexSDKBridgeProtocolTest.java": "310c5017ad9891a059d4dfb953a06dcac1b3830ed67fe4cf51c771e35d4abac0",
     "src/test/java/com/github/claudecodegui/session/CodexMessageHandlerTest.java": "30bd97fcdae4439aea691f4af864100d1724e85c5b2fd3009e7ebd614324c80b",
     "src/test/java/com/github/claudecodegui/session/SessionCallbackAdapterUsageTest.java": "5884b23876ed095ea5a9d7f049373194eb26d5de009f4dbc3ec28a5f42d618cb",
     "src/test/java/com/github/claudecodegui/session/StreamMessageCoalescerStreamEndHookTest.java": "c405ede97f403d40ef1499546b40389f3a4f4e9c640fb78228304a15b3a46632",
     "src/test/java/com/github/claudecodegui/ui/ChatWindowDelegateTest.java": "99ec5269f475bf3de433dccfc8e11756833c87517bd881007e35f1acacf2ab46",
     "webview/src/App.tsx": "bebb45224b046f8079a1768fedcc26d83fc4360089fc7ff4fefbe502f2219e9c",
+    "webview/src/components/ChatHeader/ChatHeader.tsx": "b1f8a733ffba954157c153950a22c8efb205c7937536ee7145ece243f53161b2",
     "webview/src/components/ChatScreen.tsx": "40305446dac2c8b9200d9e81bba3d911e6fe3e07dc360a6fb3151f51ed551f2b",
     "webview/src/components/MessageList.test.tsx": "380d5f59beb69c547258fa311442e029d47a49526de9f2781cec43a1cb27e41d",
     "webview/src/components/MessageList.tsx": "934ad81c15c0403bb19c0a336536dc2f12a538218c96245c332a079f11d6ed91",
     "webview/src/components/WaitingIndicator.tsx": "39efd2c324f9c330f2dfc93a02ee732b59e101603716a1d5df5b6467af288d49",
     "webview/src/contexts/MessagesContext.tsx": "5747a3085ddd11cb6ab9ea34163827898aa564e53845627b6b367d737d932eef",
+    "webview/src/contexts/SessionContext.tsx": "8633d50a1f690284542441ccccea08274d7ad4f86acb4f49755065e67e069d40",
     "webview/src/global.d.ts": "36fc8decb0bf834ceff8fd2fb697891689d05b347c9e017c24b31077743b6a8f",
     "webview/src/hooks/useChatComputations.test.ts": "df1acd979f0af34133c16f4fedd01dafc8235da6a78ac5abd05bde03aedaf230",
     "webview/src/hooks/useChatComputations.ts": "310ca463d38e88887dc61cffeab7ad427eef905482a73844a1b2b7b4f2fe224c",
+    "webview/src/hooks/useSessionManagement.test.ts": "cb08e7aab8152b82264078aeaf32ac40460157117d442f7f8061612c6b938d0b",
+    "webview/src/hooks/useSessionManagement.ts": "5cc0d053becb68a7bc27bef6bd86ae2d063ade8e6b6fe4958dc0208e1c591cd0",
     "webview/src/hooks/useWindowCallbacks.test.ts": "da807e2498cc76cea3de060420bd9454b336953ac58b5c0f9961973331b74b7f",
     "webview/src/hooks/useWindowCallbacks.ts": "d1a2fb0753d641adf072eecd298495b1c8a8358a393348da75359981b185d30d",
     "webview/src/hooks/windowCallbacks/registerCallbacks.ts": "0edf301141cadd69bb6afa83210a30f268a9a2d57680d8efe7978141eb63e6c2",
     "webview/src/hooks/windowCallbacks/registerCallbacks/messageCallbacks.ts": "12de65cb944efb39540c864b41f274b3c6fd5a16436d6a6ca9c36ce6d5d355ac",
+    "webview/src/hooks/windowCallbacks/registerCallbacks/sessionCallbacks.ts": "e6724fa6c94bae7083a0079543101291a4a079a7e9b35c0f771010cacf9aa8d5",
     "webview/src/hooks/windowCallbacks/registerCallbacks/streamingCallbacks.ts": "674d06de6fe529cb8e0aa7d6c84b9fb21e0c8f49ce2bd5cb91b4e62c58ad02f4",
     "webview/src/hooks/windowCallbacks/sessionTransition.ts": "fc020b293638ccf0892b643dd3c86bcea766c908865607292dff3e42ae4632d7",
     "webview/src/i18n/locales/en.json": "8d76f9fe11779d3570608b2645e472e162c49d23fb44911ff65160c9c19668d3",
@@ -56,7 +63,10 @@
     "webview/src/i18n/locales/ru.json": "97edd9134b0972978ecddcbb92e4041027f962571928b4d0f2e511835bbe4b8f",
     "webview/src/i18n/locales/zh-TW.json": "050a59558322082de272d94237dae9373acaf84dde81dcbe34b2406c302aaa30",
     "webview/src/i18n/locales/zh.json": "be1dc620aa6f3958ed4285a83cc499cc876c28e63ceae422b14fdbe9b8381631",
-    "webview/src/styles/less/components/loading.less": "c961533a8432fcdeafdc4bbec0654b45d07f55e39a2e6ef03a7ac8eab08686d7"
+    "webview/src/main.tsx": "554a8e1e4715e6230a300894468b614c989c4cd92e65821a6b502ff075d9538a",
+    "webview/src/styles/less/components/header.less": "01888a6f260e43593feb12f1bf19378c663c9584da2aa5bbad0087ab49004974",
+    "webview/src/styles/less/components/loading.less": "c961533a8432fcdeafdc4bbec0654b45d07f55e39a2e6ef03a7ac8eab08686d7",
+    "webview/src/types/index.ts": "ff4450bbf88874de2b016953ccbe0603c6c26d3806fd193c66481cee09d85f26"
   },
   "patches": [
     "patches/v0.5.2/0001-codex-infinite-retry.patch"
@@ -65,7 +75,8 @@
     "ai-bridge/services/codex/codex-fork.test.js",
     "ai-bridge/services/codex/codex-retry.test.js",
     "ai-bridge/services/codex/message-service.retry.test.js",
-    "ai-bridge/services/codex/codex-event-handler.test.js"
+    "ai-bridge/services/codex/codex-event-handler.test.js",
+    "ai-bridge/services/session-titles-service.test.cjs"
   ],
-  "artifact": "ccgui-0.5.2-retry.7.zip"
+  "artifact": "ccgui-0.5.2-retry.8.zip"
 }
