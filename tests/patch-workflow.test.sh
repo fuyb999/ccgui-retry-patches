@@ -247,6 +247,10 @@ test_retry_progress_patch_contains_bridge_and_ui_protocol() {
     fail "v0.5.2 failed branch deletion missing"
   [[ "$patch" == *"Codex SDK 0.148.0 or newer is required"* ]] || \
     fail "v0.5.2 Codex SDK compatibility guard missing"
+  [[ "$patch" == *"isToolResultOnlyUserMessage(message)"* ]] || \
+    fail "v0.5.2 tool-result title filter missing"
+  [[ "$patch" == *"skips tool-result carrier messages when choosing the first user prompt"* ]] || \
+    fail "v0.5.2 tool-result title regression test missing"
   [[ "$patch" != *"'exec', 'fork'"* ]] || \
     fail "v0.5.2 still contains unreliable exec fork"
 }
@@ -261,8 +265,8 @@ test_latest_release_has_versioned_retry_inputs() {
     .upstream.tag == "v0.5.2" and
     .upstream.commit == "077cccff6707c11796fb0fbd3445b66abd97f83e" and
     .pluginVersion == "0.5.2" and
-    .patchedPluginVersion == "0.5.2-retry.6" and
-    .artifact == "ccgui-0.5.2-retry.6.zip" and
+    .patchedPluginVersion == "0.5.2-retry.7" and
+    .artifact == "ccgui-0.5.2-retry.7.zip" and
     (.tests | index("ai-bridge/services/codex/codex-fork.test.js")) != null
   ' "$manifest" >/dev/null || fail "v0.5.2 manifest is not pinned to the latest release"
 }

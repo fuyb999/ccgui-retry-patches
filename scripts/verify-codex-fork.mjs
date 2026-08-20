@@ -6,7 +6,7 @@ import { createInterface } from 'node:readline';
 const CLIENT_INFO = {
   name: 'ccgui_retry_fork_verifier',
   title: 'CC GUI Retry Fork Verifier',
-  version: '0.5.2-retry.6',
+  version: '0.5.2-retry.7',
 };
 
 function parseArgs(argv) {

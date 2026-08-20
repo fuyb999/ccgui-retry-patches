@@ -8,7 +8,7 @@ hash set, and ordered Git patch list. Patches are never applied across versions.
 
 | CC GUI | Upstream commit | Patch artifact |
 | --- | --- | --- |
-| `v0.5.2` | `077cccff6707c11796fb0fbd3445b66abd97f83e` | `dist/ccgui-0.5.2-retry.6.zip` |
+| `v0.5.2` | `077cccff6707c11796fb0fbd3445b66abd97f83e` | `dist/ccgui-0.5.2-retry.7.zip` |
 | `v0.5` | `76247b2001c17ff4de28b98458b5e7ed0860962e` | `dist/ccgui-0.5-retry.4.zip` |
 
 ## Retry Policy
@@ -110,6 +110,11 @@ there are forwarded in source order, so retry or compaction cannot leave the UI
 showing text without its thinking and tool activity. These local poll ticks do
 not reset the 10-minute SDK inactivity deadline, and SDK copies are deduplicated.
 
+The WebView derives an untitled session label from the first real user prompt.
+Internal user-shaped tool-result carrier messages, including the
+`[tool_result]` placeholder used by structured history replay, are skipped and
+cannot become the session label.
+
 Stopping the CC GUI task terminates the bridge process, which also terminates an
 active request or pending delay. In-process abort signals cancel both an active
 attempt and a pending delay and are never retried.
@@ -197,10 +202,10 @@ counts and booleans only.
 1. Open IDEA settings.
 2. Go to **Plugins**.
 3. Open the gear menu and choose **Install Plugin from Disk**.
-4. Select `dist/ccgui-0.5.2-retry.6.zip`.
+4. Select `dist/ccgui-0.5.2-retry.7.zip`.
 5. Restart the IDE when prompted.
 
-IDEA reports this patched build as plugin version `0.5.2-retry.6`. The scripts
+IDEA reports this patched build as plugin version `0.5.2-retry.7`. The scripts
 never overwrite the currently installed plugin.
 
 ## Add A Version

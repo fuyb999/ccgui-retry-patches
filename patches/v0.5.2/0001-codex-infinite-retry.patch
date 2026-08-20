@@ -540,7 +540,7 @@ index 5c4c981651e2796beadf827c6b03fde3b3063d22..bcfb4c38c7538c4f66171e56783656e4
    const state = createInitialEventState((message) => emittedMessages.push(message));
 diff --git a/ai-bridge/services/codex/codex-fork.js b/ai-bridge/services/codex/codex-fork.js
 new file mode 100644
-index 0000000000000000000000000000000000000000..0f45376340fe54018ccec4301d8ecd77183369cb
+index 0000000000000000000000000000000000000000..a65e84184de12b3c2c55be47bf5905e06d91dc8f
 --- /dev/null
 +++ b/ai-bridge/services/codex/codex-fork.js
 @@ -0,0 +1,627 @@
@@ -551,7 +551,7 @@ index 0000000000000000000000000000000000000000..0f45376340fe54018ccec4301d8ecd77
 +const CODEX_APP_SERVER_CLIENT_INFO = Object.freeze({
 +  name: 'ccgui_retry_bridge',
 +  title: 'CC GUI Retry Bridge',
-+  version: '0.5.2-retry.6',
++  version: '0.5.2-retry.7',
 +});
 +const TYPESCRIPT_SDK_ORIGINATOR = 'codex_sdk_ts';
 +const APP_SERVER_KILL_GRACE_MS = 1_000;
@@ -1173,7 +1173,7 @@ index 0000000000000000000000000000000000000000..0f45376340fe54018ccec4301d8ecd77
 +}
 diff --git a/ai-bridge/services/codex/codex-fork.test.js b/ai-bridge/services/codex/codex-fork.test.js
 new file mode 100644
-index 0000000000000000000000000000000000000000..1a3e3149077f01acef99b4b2c72fde94012b8f2f
+index 0000000000000000000000000000000000000000..7d9a4bf7dbebc355a3d02de003779a498d92f8a2
 --- /dev/null
 +++ b/ai-bridge/services/codex/codex-fork.test.js
 @@ -0,0 +1,677 @@
@@ -1356,7 +1356,7 @@ index 0000000000000000000000000000000000000000..1a3e3149077f01acef99b4b2c72fde94
 +        clientInfo: {
 +          name: 'ccgui_retry_bridge',
 +          title: 'CC GUI Retry Bridge',
-+          version: '0.5.2-retry.6',
++          version: '0.5.2-retry.7',
 +        },
 +      },
 +    },
@@ -3932,7 +3932,7 @@ index 0000000000000000000000000000000000000000..01921e04bbdb2f8d0f4f5cc9cb8da9d1
 +  assert.equal(retryNotices[0].reason.category, 'inactivity');
 +});
 diff --git a/build.gradle b/build.gradle
-index 264cbfc4f9286fe7f860bf5a67ab61628f796e6e..b5bcd24b25d2bcd7d8dd70d77b0d45cc0ee96d66 100644
+index 264cbfc4f9286fe7f860bf5a67ab61628f796e6e..2cdb1638c7d6d73d3ea51e3b8b52617f49f55ed2 100644
 --- a/build.gradle
 +++ b/build.gradle
 @@ -42,7 +42,7 @@ tasks.named('checkstyleTest') {
@@ -3940,7 +3940,7 @@ index 264cbfc4f9286fe7f860bf5a67ab61628f796e6e..b5bcd24b25d2bcd7d8dd70d77b0d45cc
  
  group = 'com.github.idea-claude-code-gui'
 -version = '0.5.2'
-+version = '0.5.2-retry.6'
++version = '0.5.2-retry.7'
  
  java {
      sourceCompatibility = JavaVersion.VERSION_17
@@ -5686,6 +5686,78 @@ index e626fb1ed20243a2171caf57b44d6f864650aef9..847135d7f91f32a2ab1549b646bf7aca
    /** Cancel pending rAF-deferred updateMessages (set by messageCallbacks, called by onStreamEnd). */
    __cancelPendingUpdateMessages?: () => void;
  
+diff --git a/webview/src/hooks/useChatComputations.test.ts b/webview/src/hooks/useChatComputations.test.ts
+index 27cda490a882493ffc369e93830ee2be77ce4606..744a721f1a3569ba5e868664d397dd2735219ca4 100644
+--- a/webview/src/hooks/useChatComputations.test.ts
++++ b/webview/src/hooks/useChatComputations.test.ts
+@@ -1,7 +1,9 @@
++import { renderHook } from '@testing-library/react';
++import type { TFunction } from 'i18next';
+ import { describe, expect, it } from 'vitest';
+ import type { ClaudeContentBlock, ClaudeMessage } from '../types';
+ import { sliceLatestConversationTurn } from '../utils/turnScope';
+-import { deriveTodosForTurn } from './useChatComputations';
++import { deriveTodosForTurn, useChatComputations } from './useChatComputations';
+ 
+ interface TestMessage extends ClaudeMessage {
+   __blocks?: ClaudeContentBlock[];
+@@ -104,3 +106,36 @@ describe('deriveTodosForTurn', () => {
+     ]);
+   });
+ });
++
++describe('session title', () => {
++  it('skips tool-result carrier messages when choosing the first user prompt', () => {
++    const toolResult = {
++      type: 'user',
++      content: '[tool_result]',
++      raw: {
++        content: [{
++          type: 'tool_result',
++          tool_use_id: 'tool-1',
++          content: 'ok',
++        }],
++      },
++    } as ClaudeMessage;
++    const messages = [toolResult, user('Fix tab title')];
++
++    const { result } = renderHook(() => useChatComputations({
++      t: ((key: string) => key) as TFunction,
++      messages,
++      mergedMessages: messages,
++      subagentHistories: {},
++      customSessionTitle: null,
++      streamingActive: false,
++      currentProvider: 'codex',
++      currentSessionId: null,
++      currentSessionIdRef: { current: null },
++      getMessageText: (message) => message.content ?? '',
++      getContentBlocks: () => [],
++    }));
++
++    expect(result.current.sessionTitle).toBe('Fix tab title');
++  });
++});
+diff --git a/webview/src/hooks/useChatComputations.ts b/webview/src/hooks/useChatComputations.ts
+index c170822e21b341a9171ca1cd0dd4bfe1910705b4..7d3fb9e0b934d450a811e570deb561de7433403c 100644
+--- a/webview/src/hooks/useChatComputations.ts
++++ b/webview/src/hooks/useChatComputations.ts
+@@ -21,6 +21,7 @@ import {
+   computeStatusScopeMessages,
+   finalizeSubagentsForSettledTurn,
+   finalizeTodosForSettledTurn,
++  isToolResultOnlyUserMessage,
+   sliceLatestConversationTurn,
+ } from '../utils/turnScope';
+ import { FILE_MODIFY_TOOL_NAMES, isToolName } from '../utils/toolConstants';
+@@ -272,6 +273,7 @@ export function useChatComputations({
+     let text = '';
+     for (const message of messages) {
+       if (message.type !== 'user') continue;
++      if (isToolResultOnlyUserMessage(message)) continue;
+       const raw = message.raw;
+       if (raw && typeof raw === 'object' && raw.isMeta === true) continue;
+       const candidate = getMessageText(message).trim();
 diff --git a/webview/src/hooks/useWindowCallbacks.test.ts b/webview/src/hooks/useWindowCallbacks.test.ts
 index 4ff9433604080285a7f86b300165887373e03025..9db7d026c53c90338b2af7d4775019270bd27483 100644
 --- a/webview/src/hooks/useWindowCallbacks.test.ts
