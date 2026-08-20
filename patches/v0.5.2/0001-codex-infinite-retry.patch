@@ -3931,6 +3931,64 @@ index 00000000..01921e04
 +  assert.equal(retryNotices.length, 1);
 +  assert.equal(retryNotices[0].reason.category, 'inactivity');
 +});
+diff --git a/ai-bridge/services/session-titles-service.cjs b/ai-bridge/services/session-titles-service.cjs
+index 626b5747..fbb4abe2 100644
+--- a/ai-bridge/services/session-titles-service.cjs
++++ b/ai-bridge/services/session-titles-service.cjs
+@@ -66,14 +66,6 @@ function updateTitle(sessionId, customTitle) {
+   try {
+     const titles = loadTitles();
+ 
+-    // Validate title length (maximum 50 characters)
+-    if (customTitle && customTitle.length > 50) {
+-      return {
+-        success: false,
+-        error: 'Title too long (max 50 characters)'
+-      };
+-    }
+-
+     titles[sessionId] = {
+       customTitle: customTitle,
+       updatedAt: Date.now()
+diff --git a/ai-bridge/services/session-titles-service.test.cjs b/ai-bridge/services/session-titles-service.test.cjs
+new file mode 100644
+index 00000000..d4b654ca
+--- /dev/null
++++ b/ai-bridge/services/session-titles-service.test.cjs
+@@ -0,0 +1,33 @@
++const assert = require('node:assert/strict');
++const fs = require('node:fs');
++const os = require('node:os');
++const path = require('node:path');
++const { after, before, test } = require('node:test');
++
++const originalHome = process.env.HOME;
++let temporaryHome;
++let service;
++
++before(() => {
++  temporaryHome = fs.mkdtempSync(path.join(os.tmpdir(), 'ccgui-title-test-'));
++  process.env.HOME = temporaryHome;
++  service = require('./session-titles-service.cjs');
++});
++
++after(() => {
++  if (originalHome === undefined) {
++    delete process.env.HOME;
++  } else {
++    process.env.HOME = originalHome;
++  }
++  fs.rmSync(temporaryHome, { recursive: true, force: true });
++});
++
++test('persists a complete title longer than fifty characters', () => {
++  const longTitle = 'x'.repeat(120);
++
++  const result = service.updateTitle('session-long-title', longTitle);
++
++  assert.equal(result.success, true);
++  assert.equal(service.getTitle('session-long-title'), longTitle);
++});
 diff --git a/build.gradle b/build.gradle
 index 264cbfc4..2cdb1638 100644
 --- a/build.gradle
@@ -6554,7 +6612,7 @@ index 4b4a8eab..9461f3c1 100644
        sessionId,
        provider: effectiveProvider,
 diff --git a/webview/src/hooks/useWindowCallbacks.test.ts b/webview/src/hooks/useWindowCallbacks.test.ts
-index 4ff94336..b482d226 100644
+index 4ff94336..b0f81784 100644
 --- a/webview/src/hooks/useWindowCallbacks.test.ts
 +++ b/webview/src/hooks/useWindowCallbacks.test.ts
 @@ -30,12 +30,14 @@ describe('useWindowCallbacks integration', () => {
@@ -6588,6 +6646,29 @@ index 4ff94336..b482d226 100644
      delete window.__historySurfaceRefreshEpoch;
      vi.mocked(forceWebviewRepaint).mockClear();
      window.__dependencyStatusState = 'pending';
+@@ -442,9 +446,9 @@ describe('useWindowCallbacks integration', () => {
+     expect(opts.updateHistoryTitle).not.toHaveBeenCalled();
+   });
+ 
+-  // ===== Codex thread transition: route long titles to local-only =====
++  // ===== Codex thread transition: persist complete titles =====
+ 
+-  it('setSessionId with title > 50 chars uses applyHistoryTitleLocal to avoid backend 50-char limit', () => {
++  it('setSessionId with title > 50 chars persists through updateHistoryTitle', () => {
+     const longTitle = 'A very long AI-generated session title that exceeds fifty characters easily';
+     const opts = createOptions({
+       customSessionTitleRef: { current: longTitle },
+@@ -456,8 +460,8 @@ describe('useWindowCallbacks integration', () => {
+       window.setSessionId!('sess-new');
+     });
+ 
+-    expect(opts.applyHistoryTitleLocal).toHaveBeenCalledWith('sess-new', longTitle);
+-    expect(opts.updateHistoryTitle).not.toHaveBeenCalled();
++    expect(opts.updateHistoryTitle).toHaveBeenCalledWith('sess-new', longTitle);
++    expect(opts.applyHistoryTitleLocal).not.toHaveBeenCalled();
+   });
+ 
+   it('setSessionId with title <= 50 chars uses updateHistoryTitle for backend persistence', () => {
 @@ -478,6 +482,47 @@ describe('useWindowCallbacks integration', () => {
  
    // ===== updateMessages is blocked during transition =====
@@ -7419,6 +7500,36 @@ index c7561d08..182a3676 100644
        if (pending.mode === 'prepend'
            && isStreamingRef.current
            && streamingMessageIndexRef.current >= 0) {
+diff --git a/webview/src/hooks/windowCallbacks/registerCallbacks/sessionCallbacks.ts b/webview/src/hooks/windowCallbacks/registerCallbacks/sessionCallbacks.ts
+index 2ea0df4b..88e70630 100644
+--- a/webview/src/hooks/windowCallbacks/registerCallbacks/sessionCallbacks.ts
++++ b/webview/src/hooks/windowCallbacks/registerCallbacks/sessionCallbacks.ts
+@@ -17,9 +17,6 @@ import {
+   settleDependencyStatusRequest,
+ } from '../../../utils/bridgeStartup';
+ 
+-// Matches session-titles-service.cjs#updateTitle, which rejects longer titles.
+-const CUSTOM_TITLE_MAX_LENGTH = 50;
+-
+ export function registerSessionAndSdkCallbacks(
+   options: UseWindowCallbacksOptions,
+   tRef: MutableRefObject<UseWindowCallbacksOptions['t']>,
+@@ -52,14 +49,7 @@ export function registerSessionAndSdkCallbacks(
+     // Orphaned title entries are harmless and cleaned up on session deletion.
+     const title = customSessionTitleRef.current;
+     if (title && oldId !== sessionId) {
+-      // AI-generated titles can exceed the backend limit. Fall back to
+-      // local-only update so the UI keeps the title visible without a
+-      // silent backend write failure.
+-      if (title.length <= CUSTOM_TITLE_MAX_LENGTH) {
+-        updateHistoryTitle(sessionId, title);
+-      } else {
+-        applyHistoryTitleLocal(sessionId, title);
+-      }
++      updateHistoryTitle(sessionId, title);
+     }
+   };
+ 
 diff --git a/webview/src/hooks/windowCallbacks/registerCallbacks/streamingCallbacks.ts b/webview/src/hooks/windowCallbacks/registerCallbacks/streamingCallbacks.ts
 index 1b971fe7..8dc3e460 100644
 --- a/webview/src/hooks/windowCallbacks/registerCallbacks/streamingCallbacks.ts
