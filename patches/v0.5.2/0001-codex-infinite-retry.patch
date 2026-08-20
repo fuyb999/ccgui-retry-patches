@@ -1,5 +1,5 @@
 diff --git a/ai-bridge/services/codex/codex-event-handler.js b/ai-bridge/services/codex/codex-event-handler.js
-index b519699ca4138228d118d37872999ba572214cd0..aeeec66e9a4b8b97aeed6d368d192f07bb529dbd 100644
+index b519699c..aeeec66e 100644
 --- a/ai-bridge/services/codex/codex-event-handler.js
 +++ b/ai-bridge/services/codex/codex-event-handler.js
 @@ -34,6 +34,7 @@ import {
@@ -297,7 +297,7 @@ index b519699ca4138228d118d37872999ba572214cd0..aeeec66e9a4b8b97aeed6d368d192f07
  
        default: {
 diff --git a/ai-bridge/services/codex/codex-event-handler.test.js b/ai-bridge/services/codex/codex-event-handler.test.js
-index 5c4c981651e2796beadf827c6b03fde3b3063d22..bcfb4c38c7538c4f66171e56783656e46daf080b 100644
+index 5c4c9816..bcfb4c38 100644
 --- a/ai-bridge/services/codex/codex-event-handler.test.js
 +++ b/ai-bridge/services/codex/codex-event-handler.test.js
 @@ -9,6 +9,7 @@ import {
@@ -540,7 +540,7 @@ index 5c4c981651e2796beadf827c6b03fde3b3063d22..bcfb4c38c7538c4f66171e56783656e4
    const state = createInitialEventState((message) => emittedMessages.push(message));
 diff --git a/ai-bridge/services/codex/codex-fork.js b/ai-bridge/services/codex/codex-fork.js
 new file mode 100644
-index 0000000000000000000000000000000000000000..a65e84184de12b3c2c55be47bf5905e06d91dc8f
+index 00000000..a65e8418
 --- /dev/null
 +++ b/ai-bridge/services/codex/codex-fork.js
 @@ -0,0 +1,627 @@
@@ -1173,7 +1173,7 @@ index 0000000000000000000000000000000000000000..a65e84184de12b3c2c55be47bf5905e0
 +}
 diff --git a/ai-bridge/services/codex/codex-fork.test.js b/ai-bridge/services/codex/codex-fork.test.js
 new file mode 100644
-index 0000000000000000000000000000000000000000..7d9a4bf7dbebc355a3d02de003779a498d92f8a2
+index 00000000..7d9a4bf7
 --- /dev/null
 +++ b/ai-bridge/services/codex/codex-fork.test.js
 @@ -0,0 +1,677 @@
@@ -1856,7 +1856,7 @@ index 0000000000000000000000000000000000000000..7d9a4bf7dbebc355a3d02de003779a49
 +});
 diff --git a/ai-bridge/services/codex/codex-retry.js b/ai-bridge/services/codex/codex-retry.js
 new file mode 100644
-index 0000000000000000000000000000000000000000..cc9e482460076077dee7cc755caef81d70b222e1
+index 00000000..cc9e4824
 --- /dev/null
 +++ b/ai-bridge/services/codex/codex-retry.js
 @@ -0,0 +1,294 @@
@@ -2156,7 +2156,7 @@ index 0000000000000000000000000000000000000000..cc9e482460076077dee7cc755caef81d
 +}
 diff --git a/ai-bridge/services/codex/codex-retry.test.js b/ai-bridge/services/codex/codex-retry.test.js
 new file mode 100644
-index 0000000000000000000000000000000000000000..e2fcc8df870d831882d2e7e4b57734adf536a2c0
+index 00000000..e2fcc8df
 --- /dev/null
 +++ b/ai-bridge/services/codex/codex-retry.test.js
 @@ -0,0 +1,432 @@
@@ -2593,7 +2593,7 @@ index 0000000000000000000000000000000000000000..e2fcc8df870d831882d2e7e4b57734ad
 +  assert.equal(attempts, 1);
 +});
 diff --git a/ai-bridge/services/codex/message-service.js b/ai-bridge/services/codex/message-service.js
-index 9d2967b726d00ed67fb95aaee8f53da5f5078112..6741e42cd4a67602b3c81dbd1850db290a116ebd 100644
+index 9d2967b7..6741e42c 100644
 --- a/ai-bridge/services/codex/message-service.js
 +++ b/ai-bridge/services/codex/message-service.js
 @@ -20,7 +20,7 @@
@@ -3025,7 +3025,7 @@ index 9d2967b726d00ed67fb95aaee8f53da5f5078112..6741e42cd4a67602b3c81dbd1850db29
      // ============================================================
 diff --git a/ai-bridge/services/codex/message-service.retry.test.js b/ai-bridge/services/codex/message-service.retry.test.js
 new file mode 100644
-index 0000000000000000000000000000000000000000..01921e04bbdb2f8d0f4f5cc9cb8da9d14d33d932
+index 00000000..01921e04
 --- /dev/null
 +++ b/ai-bridge/services/codex/message-service.retry.test.js
 @@ -0,0 +1,902 @@
@@ -3932,7 +3932,7 @@ index 0000000000000000000000000000000000000000..01921e04bbdb2f8d0f4f5cc9cb8da9d1
 +  assert.equal(retryNotices[0].reason.category, 'inactivity');
 +});
 diff --git a/build.gradle b/build.gradle
-index 264cbfc4f9286fe7f860bf5a67ab61628f796e6e..2cdb1638c7d6d73d3ea51e3b8b52617f49f55ed2 100644
+index 264cbfc4..2cdb1638 100644
 --- a/build.gradle
 +++ b/build.gradle
 @@ -42,7 +42,7 @@ tasks.named('checkstyleTest') {
@@ -3945,7 +3945,7 @@ index 264cbfc4f9286fe7f860bf5a67ab61628f796e6e..2cdb1638c7d6d73d3ea51e3b8b52617f
  java {
      sourceCompatibility = JavaVersion.VERSION_17
 diff --git a/src/main/java/com/github/claudecodegui/dependency/SdkDefinition.java b/src/main/java/com/github/claudecodegui/dependency/SdkDefinition.java
-index e04aca1c260b327d107ec16efbc8212eabb7bd26..9a52d2ed880e2dc85aa01c187e3860d9e94a3a79 100644
+index e04aca1c..9a52d2ed 100644
 --- a/src/main/java/com/github/claudecodegui/dependency/SdkDefinition.java
 +++ b/src/main/java/com/github/claudecodegui/dependency/SdkDefinition.java
 @@ -30,11 +30,11 @@ public enum SdkDefinition {
@@ -3974,7 +3974,7 @@ index e04aca1c260b327d107ec16efbc8212eabb7bd26..9a52d2ed880e2dc85aa01c187e3860d9
       */
      public String getMinRequiredVersion() {
 diff --git a/src/main/java/com/github/claudecodegui/handler/history/HistoryMessageInjector.java b/src/main/java/com/github/claudecodegui/handler/history/HistoryMessageInjector.java
-index fee7101e923a81defd870ed1a7594681dcee3475..cecf2ec25f633c314660e6e065d443ef9ecf93ad 100644
+index fee7101e..cecf2ec2 100644
 --- a/src/main/java/com/github/claudecodegui/handler/history/HistoryMessageInjector.java
 +++ b/src/main/java/com/github/claudecodegui/handler/history/HistoryMessageInjector.java
 @@ -27,6 +27,7 @@ import java.util.Base64;
@@ -4156,7 +4156,7 @@ index fee7101e923a81defd870ed1a7594681dcee3475..cecf2ec25f633c314660e6e065d443ef
       * Extracts a provider-reported Codex context snapshot from a JSONL token_count record.
       * Only last_token_usage represents the active model context. Session-cumulative
 diff --git a/src/main/java/com/github/claudecodegui/provider/codex/CodexSDKBridge.java b/src/main/java/com/github/claudecodegui/provider/codex/CodexSDKBridge.java
-index 87afb53d00a1e7a3d0148ca3c80af32502091fa4..34d51689115ea05490ae130dca89ef550eaab732 100644
+index 87afb53d..34d51689 100644
 --- a/src/main/java/com/github/claudecodegui/provider/codex/CodexSDKBridge.java
 +++ b/src/main/java/com/github/claudecodegui/provider/codex/CodexSDKBridge.java
 @@ -38,6 +38,7 @@ import java.util.concurrent.atomic.AtomicReference;
@@ -4192,7 +4192,7 @@ index 87afb53d00a1e7a3d0148ca3c80af32502091fa4..34d51689115ea05490ae130dca89ef55
              LOG.warn("Failed to load Codex session history: " + e.getMessage(), e);
              return List.of();
 diff --git a/src/main/java/com/github/claudecodegui/session/CallbackHandler.java b/src/main/java/com/github/claudecodegui/session/CallbackHandler.java
-index 28c819ddcf702e045dfd77abcad9dd43f1cb1179..432843c4f8ce4787c64e880f23d3c036f589a5b3 100644
+index 28c819dd..432843c4 100644
 --- a/src/main/java/com/github/claudecodegui/session/CallbackHandler.java
 +++ b/src/main/java/com/github/claudecodegui/session/CallbackHandler.java
 @@ -42,6 +42,12 @@ public class CallbackHandler {
@@ -4210,10 +4210,10 @@ index 28c819ddcf702e045dfd77abcad9dd43f1cb1179..432843c4f8ce4787c64e880f23d3c036
       */
 diff --git a/src/main/java/com/github/claudecodegui/session/CanonicalSessionTitleExtractor.java b/src/main/java/com/github/claudecodegui/session/CanonicalSessionTitleExtractor.java
 new file mode 100644
-index 0000000000000000000000000000000000000000..3e6265a482f52aea70b68d1033537dbae39c5e94
+index 00000000..8664dac1
 --- /dev/null
 +++ b/src/main/java/com/github/claudecodegui/session/CanonicalSessionTitleExtractor.java
-@@ -0,0 +1,109 @@
+@@ -0,0 +1,112 @@
 +package com.github.claudecodegui.session;
 +
 +import com.google.gson.JsonArray;
@@ -4235,6 +4235,9 @@ index 0000000000000000000000000000000000000000..3e6265a482f52aea70b68d1033537dba
 +    }
 +
 +    static String fromMessages(List<ClaudeSession.Message> messages) {
++        if (messages == null) {
++            return null;
++        }
 +        for (ClaudeSession.Message message : messages) {
 +            String prompt = fromMessage(message);
 +            if (prompt != null) {
@@ -4324,7 +4327,7 @@ index 0000000000000000000000000000000000000000..3e6265a482f52aea70b68d1033537dba
 +    }
 +}
 diff --git a/src/main/java/com/github/claudecodegui/session/ClaudeSession.java b/src/main/java/com/github/claudecodegui/session/ClaudeSession.java
-index 941f46118eb1f987b99e79839a0d1169f137684f..7514fdf2cf39c525aca58f0d73a07ecc736a82da 100644
+index 941f4611..7514fdf2 100644
 --- a/src/main/java/com/github/claudecodegui/session/ClaudeSession.java
 +++ b/src/main/java/com/github/claudecodegui/session/ClaudeSession.java
 @@ -114,6 +114,9 @@ public class ClaudeSession {
@@ -4338,7 +4341,7 @@ index 941f46118eb1f987b99e79839a0d1169f137684f..7514fdf2cf39c525aca58f0d73a07ecc
  
          void onPermissionRequested(PermissionRequest request);
 diff --git a/src/main/java/com/github/claudecodegui/session/CodexMessageHandler.java b/src/main/java/com/github/claudecodegui/session/CodexMessageHandler.java
-index 42c2b8e9f8b7f0d313e74fdb09cbdaf52c525c27..0abbcafac56239a545b4d5ebb24958b705719004 100644
+index 42c2b8e9..0abbcafa 100644
 --- a/src/main/java/com/github/claudecodegui/session/CodexMessageHandler.java
 +++ b/src/main/java/com/github/claudecodegui/session/CodexMessageHandler.java
 @@ -8,8 +8,12 @@ import com.github.claudecodegui.util.UsageCostCalculator;
@@ -4487,7 +4490,7 @@ index 42c2b8e9f8b7f0d313e74fdb09cbdaf52c525c27..0abbcafac56239a545b4d5ebb24958b7
       * Handle a complete assistant message in JSON format.
       * Contains thinking, tool_use, text, and other content types.
 diff --git a/src/main/java/com/github/claudecodegui/session/SessionCallbackAdapter.java b/src/main/java/com/github/claudecodegui/session/SessionCallbackAdapter.java
-index 3af159f3bf60445e1787e22a23259799b0cf0f98..4fabea6ff60971c2eb99d0b94c5050c2efe9dedc 100644
+index 3af159f3..4fabea6f 100644
 --- a/src/main/java/com/github/claudecodegui/session/SessionCallbackAdapter.java
 +++ b/src/main/java/com/github/claudecodegui/session/SessionCallbackAdapter.java
 @@ -3,6 +3,9 @@ package com.github.claudecodegui.session;
@@ -4694,7 +4697,7 @@ index 3af159f3bf60445e1787e22a23259799b0cf0f98..4fabea6ff60971c2eb99d0b94c5050c2
      }
  
 diff --git a/src/main/java/com/github/claudecodegui/session/StreamMessageCoalescer.java b/src/main/java/com/github/claudecodegui/session/StreamMessageCoalescer.java
-index 370590224b00844d9544d1b3d13b824cbee4a8b8..7da1899529dfdaf85695558268a054f94e1615eb 100644
+index 37059022..7da18995 100644
 --- a/src/main/java/com/github/claudecodegui/session/StreamMessageCoalescer.java
 +++ b/src/main/java/com/github/claudecodegui/session/StreamMessageCoalescer.java
 @@ -100,7 +100,10 @@ public class StreamMessageCoalescer {
@@ -4845,7 +4848,7 @@ index 370590224b00844d9544d1b3d13b824cbee4a8b8..7da1899529dfdaf85695558268a054f9
  
      private static boolean hasSamePrefix(List<ClaudeSession.Message> previousMessages,
 diff --git a/src/main/java/com/github/claudecodegui/ui/ChatWindowDelegate.java b/src/main/java/com/github/claudecodegui/ui/ChatWindowDelegate.java
-index 6c53c571e3ebacafd69c7145631806eed1847047..50645112aff384cc8cdcb62e34f04e0a8acf1735 100644
+index 6c53c571..50645112 100644
 --- a/src/main/java/com/github/claudecodegui/ui/ChatWindowDelegate.java
 +++ b/src/main/java/com/github/claudecodegui/ui/ChatWindowDelegate.java
 @@ -107,6 +107,7 @@ public class ChatWindowDelegate {
@@ -4869,7 +4872,7 @@ index 6c53c571e3ebacafd69c7145631806eed1847047..50645112aff384cc8cdcb62e34f04e0a
                      + (sessionId != null ? sessionId : "(none)")
                      + ", messages=" + messages.size()
 diff --git a/src/main/java/com/github/claudecodegui/ui/toolwindow/ClaudeChatWindow.java b/src/main/java/com/github/claudecodegui/ui/toolwindow/ClaudeChatWindow.java
-index a744725961bbfcdc834121a778d9025872d957a3..1c474ad3a891c3a9765883640fd70ea064882864 100644
+index a7447259..1c474ad3 100644
 --- a/src/main/java/com/github/claudecodegui/ui/toolwindow/ClaudeChatWindow.java
 +++ b/src/main/java/com/github/claudecodegui/ui/toolwindow/ClaudeChatWindow.java
 @@ -3119,6 +3119,13 @@ public class ClaudeChatWindow {
@@ -4887,7 +4890,7 @@ index a744725961bbfcdc834121a778d9025872d957a3..1c474ad3a891c3a9765883640fd70ea0
              public void setFrontendReady(boolean ready) {
                  updateFrontendReadyState(ready);
 diff --git a/src/test/java/com/github/claudecodegui/dependency/DependencyManagerVersioningTest.java b/src/test/java/com/github/claudecodegui/dependency/DependencyManagerVersioningTest.java
-index fa95e913e6606515b8ccbcda3ef8df20e5daf57b..faa5ab3fae75c99a9416fd8091dcee8e356b2fc8 100644
+index fa95e913..faa5ab3f 100644
 --- a/src/test/java/com/github/claudecodegui/dependency/DependencyManagerVersioningTest.java
 +++ b/src/test/java/com/github/claudecodegui/dependency/DependencyManagerVersioningTest.java
 @@ -27,7 +27,7 @@ public class DependencyManagerVersioningTest {
@@ -4912,7 +4915,7 @@ index fa95e913e6606515b8ccbcda3ef8df20e5daf57b..faa5ab3fae75c99a9416fd8091dcee8e
      }
  }
 diff --git a/src/test/java/com/github/claudecodegui/provider/codex/CodexSDKBridgeHistoryTest.java b/src/test/java/com/github/claudecodegui/provider/codex/CodexSDKBridgeHistoryTest.java
-index 4149893b0878b473234c6774dc7008f5d039331c..d1a2978622b787aac0cca307e710fc5aa770f2f0 100644
+index 4149893b..d1a29786 100644
 --- a/src/test/java/com/github/claudecodegui/provider/codex/CodexSDKBridgeHistoryTest.java
 +++ b/src/test/java/com/github/claudecodegui/provider/codex/CodexSDKBridgeHistoryTest.java
 @@ -47,6 +47,82 @@ public class CodexSDKBridgeHistoryTest {
@@ -4999,7 +5002,7 @@ index 4149893b0878b473234c6774dc7008f5d039331c..d1a2978622b787aac0cca307e710fc5a
      public void getSessionMessagesPreservesToolResultForAutoRestore() throws IOException {
          Path sessionsDir = Files.createTempDirectory("codex-sdk-bridge-history-tool-result");
 diff --git a/src/test/java/com/github/claudecodegui/provider/codex/CodexSDKBridgeProtocolTest.java b/src/test/java/com/github/claudecodegui/provider/codex/CodexSDKBridgeProtocolTest.java
-index 9509cd8daf5e918f08e75c49dffaa2188a9b1a69..a264cc63f9b097fe1e47b4066bde9e16e4c58655 100644
+index 9509cd8d..a264cc63 100644
 --- a/src/test/java/com/github/claudecodegui/provider/codex/CodexSDKBridgeProtocolTest.java
 +++ b/src/test/java/com/github/claudecodegui/provider/codex/CodexSDKBridgeProtocolTest.java
 @@ -38,6 +38,26 @@ public class CodexSDKBridgeProtocolTest {
@@ -5031,10 +5034,10 @@ index 9509cd8daf5e918f08e75c49dffaa2188a9b1a69..a264cc63f9b097fe1e47b4066bde9e16
              processOutputLine(
 diff --git a/src/test/java/com/github/claudecodegui/session/CanonicalSessionTitleExtractorTest.java b/src/test/java/com/github/claudecodegui/session/CanonicalSessionTitleExtractorTest.java
 new file mode 100644
-index 0000000000000000000000000000000000000000..dd5c50f7fc3da80c47d351c4c3c05a75fc9799d9
+index 00000000..1ef80933
 --- /dev/null
 +++ b/src/test/java/com/github/claudecodegui/session/CanonicalSessionTitleExtractorTest.java
-@@ -0,0 +1,83 @@
+@@ -0,0 +1,88 @@
 +package com.github.claudecodegui.session;
 +
 +import com.google.gson.JsonArray;
@@ -5047,6 +5050,11 @@ index 0000000000000000000000000000000000000000..dd5c50f7fc3da80c47d351c4c3c05a75
 +import static org.junit.Assert.assertNull;
 +
 +public class CanonicalSessionTitleExtractorTest {
++
++    @Test
++    public void nullMessageListReturnsNull() {
++        assertNull(CanonicalSessionTitleExtractor.fromMessages(null));
++    }
 +
 +    @Test
 +    public void returnsTheCompleteFirstRealUserPrompt() {
@@ -5119,7 +5127,7 @@ index 0000000000000000000000000000000000000000..dd5c50f7fc3da80c47d351c4c3c05a75
 +    }
 +}
 diff --git a/src/test/java/com/github/claudecodegui/session/CodexMessageHandlerTest.java b/src/test/java/com/github/claudecodegui/session/CodexMessageHandlerTest.java
-index 67147bce06614f026bb9a282b1d14051c5bc2491..4b61c37c003b2f9b3980a5076de1bda7baf41fb2 100644
+index 67147bce..4b61c37c 100644
 --- a/src/test/java/com/github/claudecodegui/session/CodexMessageHandlerTest.java
 +++ b/src/test/java/com/github/claudecodegui/session/CodexMessageHandlerTest.java
 @@ -31,6 +31,7 @@ public class CodexMessageHandlerTest {
@@ -5188,7 +5196,7 @@ index 67147bce06614f026bb9a282b1d14051c5bc2491..4b61c37c003b2f9b3980a5076de1bda7
      public void contentDeltaIsForwardedToFrontendStreamingCallback() {
          SessionState state = new SessionState();
 diff --git a/src/test/java/com/github/claudecodegui/session/SessionCallbackAdapterUsageTest.java b/src/test/java/com/github/claudecodegui/session/SessionCallbackAdapterUsageTest.java
-index 1304649ec2facce1732c19f15f7a3bb60b37a63d..7392b1aa54cc61ff4eae5850bcdc9242dd590d64 100644
+index 1304649e..7392b1aa 100644
 --- a/src/test/java/com/github/claudecodegui/session/SessionCallbackAdapterUsageTest.java
 +++ b/src/test/java/com/github/claudecodegui/session/SessionCallbackAdapterUsageTest.java
 @@ -1,14 +1,104 @@
@@ -5297,7 +5305,7 @@ index 1304649ec2facce1732c19f15f7a3bb60b37a63d..7392b1aa54cc61ff4eae5850bcdc9242
      public void normalizeUsageValueRejectsNegativeValues() {
          assertEquals(0, SessionCallbackAdapter.normalizeUsageValue(-1));
 diff --git a/src/test/java/com/github/claudecodegui/session/StreamMessageCoalescerStreamEndHookTest.java b/src/test/java/com/github/claudecodegui/session/StreamMessageCoalescerStreamEndHookTest.java
-index 112634999404d9fdb8d44bec608cba85a0671e7f..5cbc0f59d5a85454b878b77361efe6aa7f7fa645 100644
+index 11263499..5cbc0f59 100644
 --- a/src/test/java/com/github/claudecodegui/session/StreamMessageCoalescerStreamEndHookTest.java
 +++ b/src/test/java/com/github/claudecodegui/session/StreamMessageCoalescerStreamEndHookTest.java
 @@ -10,6 +10,7 @@ import java.util.concurrent.atomic.AtomicInteger;
@@ -5396,7 +5404,7 @@ index 112634999404d9fdb8d44bec608cba85a0671e7f..5cbc0f59d5a85454b878b77361efe6aa
          List<ClaudeSession.Message> messages = new ArrayList<>();
          for (int i = 0; i < count; i++) {
 diff --git a/src/test/java/com/github/claudecodegui/ui/ChatWindowDelegateTest.java b/src/test/java/com/github/claudecodegui/ui/ChatWindowDelegateTest.java
-index cfc0d9a4430e7ef7bc0c29af3330ea90018f3db4..639f0a2aa5eb5ca74a1b106c1209043008660f43 100644
+index cfc0d9a4..639f0a2a 100644
 --- a/src/test/java/com/github/claudecodegui/ui/ChatWindowDelegateTest.java
 +++ b/src/test/java/com/github/claudecodegui/ui/ChatWindowDelegateTest.java
 @@ -89,6 +89,23 @@ public class ChatWindowDelegateTest {
@@ -5448,7 +5456,7 @@ index cfc0d9a4430e7ef7bc0c29af3330ea90018f3db4..639f0a2aa5eb5ca74a1b106c12090430
                                      javaScriptCalls.add((String) args[0]);
                                      return null;
 diff --git a/webview/src/App.tsx b/webview/src/App.tsx
-index 9bf73aba1746df004d1bbee146f03006447bc08a..ba5b0d317068cdde3233a14ad51d1f42ac60b40b 100644
+index 9bf73aba..ba5b0d31 100644
 --- a/webview/src/App.tsx
 +++ b/webview/src/App.tsx
 @@ -73,7 +73,7 @@ const App = () => {
@@ -5470,7 +5478,7 @@ index 9bf73aba1746df004d1bbee146f03006447bc08a..ba5b0d317068cdde3233a14ad51d1f42
      setCurrentSessionId, setUsagePercentage, setUsageUsedTokens, setUsageMaxTokens,
      setPermissionMode, setCurrentProvider, setClaudePermissionMode, setCodexPermissionMode,
 diff --git a/webview/src/components/ChatScreen.tsx b/webview/src/components/ChatScreen.tsx
-index 1723b1fad73d2abe295ea2d21ced08c9f53fdb9a..5b8c418eb8b8ff39c95bf4f3183cb455e85e48cd 100644
+index 1723b1fa..5b8c418e 100644
 --- a/webview/src/components/ChatScreen.tsx
 +++ b/webview/src/components/ChatScreen.tsx
 @@ -7,6 +7,7 @@ import type {
@@ -5509,7 +5517,7 @@ index 1723b1fad73d2abe295ea2d21ced08c9f53fdb9a..5b8c418eb8b8ff39c95bf4f3183cb455
  
        <StatusPanelErrorBoundary>
 diff --git a/webview/src/components/MessageList.test.tsx b/webview/src/components/MessageList.test.tsx
-index 17ebf1256724209a918dc78867cb1deaeb57f6b5..0084887a8488ede31a33dcf0dc3fcbd11365dcb8 100644
+index 17ebf125..0084887a 100644
 --- a/webview/src/components/MessageList.test.tsx
 +++ b/webview/src/components/MessageList.test.tsx
 @@ -462,4 +462,32 @@ describe('MessageList container behaviour', () => {
@@ -5546,7 +5554,7 @@ index 17ebf1256724209a918dc78867cb1deaeb57f6b5..0084887a8488ede31a33dcf0dc3fcbd1
 +  });
  });
 diff --git a/webview/src/components/MessageList.tsx b/webview/src/components/MessageList.tsx
-index 399658c9365b3946e7471a666c63cf9622ff42c2..a858775d0f2c57393f042f9f06146bf4ea28b689 100644
+index 399658c9..a858775d 100644
 --- a/webview/src/components/MessageList.tsx
 +++ b/webview/src/components/MessageList.tsx
 @@ -4,6 +4,7 @@ import type { ClaudeMessage, ClaudeContentBlock, CodexHistoryPageInfo, ToolResul
@@ -5586,7 +5594,7 @@ index 399658c9365b3946e7471a666c63cf9622ff42c2..a858775d0f2c57393f042f9f06146bf4
    );
 diff --git a/webview/src/components/RetryStatusStrip.test.tsx b/webview/src/components/RetryStatusStrip.test.tsx
 new file mode 100644
-index 0000000000000000000000000000000000000000..8a65530cc3d5a99a099146cac13d6f5f2747a15c
+index 00000000..8a65530c
 --- /dev/null
 +++ b/webview/src/components/RetryStatusStrip.test.tsx
 @@ -0,0 +1,43 @@
@@ -5635,7 +5643,7 @@ index 0000000000000000000000000000000000000000..8a65530cc3d5a99a099146cac13d6f5f
 +});
 diff --git a/webview/src/components/RetryStatusStrip.tsx b/webview/src/components/RetryStatusStrip.tsx
 new file mode 100644
-index 0000000000000000000000000000000000000000..ba4691cdddcc364d4712724bbb6715ad90cb5bff
+index 00000000..ba4691cd
 --- /dev/null
 +++ b/webview/src/components/RetryStatusStrip.tsx
 @@ -0,0 +1,20 @@
@@ -5661,7 +5669,7 @@ index 0000000000000000000000000000000000000000..ba4691cdddcc364d4712724bbb6715ad
 +export default RetryStatusStrip;
 diff --git a/webview/src/components/WaitingIndicator.test.tsx b/webview/src/components/WaitingIndicator.test.tsx
 new file mode 100644
-index 0000000000000000000000000000000000000000..3974da1822abb443896d4ec0f91d0eb71a9ec058
+index 00000000..3974da18
 --- /dev/null
 +++ b/webview/src/components/WaitingIndicator.test.tsx
 @@ -0,0 +1,86 @@
@@ -5752,7 +5760,7 @@ index 0000000000000000000000000000000000000000..3974da1822abb443896d4ec0f91d0eb7
 +  });
 +});
 diff --git a/webview/src/components/WaitingIndicator.tsx b/webview/src/components/WaitingIndicator.tsx
-index bfd41eb8d6fa066607093100e6add0df893dcb37..0510586b202ec5860fa18c8b8b1bebf5a34850cd 100644
+index bfd41eb8..0510586b 100644
 --- a/webview/src/components/WaitingIndicator.tsx
 +++ b/webview/src/components/WaitingIndicator.tsx
 @@ -1,13 +1,24 @@
@@ -5854,7 +5862,7 @@ index bfd41eb8d6fa066607093100e6add0df893dcb37..0510586b202ec5860fa18c8b8b1bebf5
  export default WaitingIndicator;
 -
 diff --git a/webview/src/contexts/MessagesContext.tsx b/webview/src/contexts/MessagesContext.tsx
-index e71c53d6826a0a5d29bdc90becb7a0d6431d9d22..3003f8c5787ea3a67289ce11f19743ed11450748 100644
+index e71c53d6..3003f8c5 100644
 --- a/webview/src/contexts/MessagesContext.tsx
 +++ b/webview/src/contexts/MessagesContext.tsx
 @@ -3,6 +3,20 @@ import type { ClaudeMessage, SubagentHistoryResponse } from '../types';
@@ -5912,7 +5920,7 @@ index e71c53d6826a0a5d29bdc90becb7a0d6431d9d22..3003f8c5787ea3a67289ce11f19743ed
  
    return <MessagesContext.Provider value={value}>{children}</MessagesContext.Provider>;
 diff --git a/webview/src/global.d.ts b/webview/src/global.d.ts
-index e626fb1ed20243a2171caf57b44d6f864650aef9..847135d7f91f32a2ab1549b646bf7aca560fddd1 100644
+index e626fb1e..847135d7 100644
 --- a/webview/src/global.d.ts
 +++ b/webview/src/global.d.ts
 @@ -36,6 +36,8 @@ interface Window {
@@ -5943,7 +5951,7 @@ index e626fb1ed20243a2171caf57b44d6f864650aef9..847135d7f91f32a2ab1549b646bf7aca
    __cancelPendingUpdateMessages?: () => void;
  
 diff --git a/webview/src/hooks/useChatComputations.test.ts b/webview/src/hooks/useChatComputations.test.ts
-index 27cda490a882493ffc369e93830ee2be77ce4606..744a721f1a3569ba5e868664d397dd2735219ca4 100644
+index 27cda490..744a721f 100644
 --- a/webview/src/hooks/useChatComputations.test.ts
 +++ b/webview/src/hooks/useChatComputations.test.ts
 @@ -1,7 +1,9 @@
@@ -5995,7 +6003,7 @@ index 27cda490a882493ffc369e93830ee2be77ce4606..744a721f1a3569ba5e868664d397dd27
 +  });
 +});
 diff --git a/webview/src/hooks/useChatComputations.ts b/webview/src/hooks/useChatComputations.ts
-index c170822e21b341a9171ca1cd0dd4bfe1910705b4..7d3fb9e0b934d450a811e570deb561de7433403c 100644
+index c170822e..7d3fb9e0 100644
 --- a/webview/src/hooks/useChatComputations.ts
 +++ b/webview/src/hooks/useChatComputations.ts
 @@ -21,6 +21,7 @@ import {
@@ -6015,7 +6023,7 @@ index c170822e21b341a9171ca1cd0dd4bfe1910705b4..7d3fb9e0b934d450a811e570deb561de
        if (raw && typeof raw === 'object' && raw.isMeta === true) continue;
        const candidate = getMessageText(message).trim();
 diff --git a/webview/src/hooks/useWindowCallbacks.test.ts b/webview/src/hooks/useWindowCallbacks.test.ts
-index 4ff9433604080285a7f86b300165887373e03025..9db7d026c53c90338b2af7d4775019270bd27483 100644
+index 4ff94336..9db7d026 100644
 --- a/webview/src/hooks/useWindowCallbacks.test.ts
 +++ b/webview/src/hooks/useWindowCallbacks.test.ts
 @@ -30,6 +30,7 @@ describe('useWindowCallbacks integration', () => {
@@ -6374,7 +6382,7 @@ index 4ff9433604080285a7f86b300165887373e03025..9db7d026c53c90338b2af7d477501927
  
    // ===== clearMessages forces a webview repaint to clear JCEF ghosting =====
 diff --git a/webview/src/hooks/useWindowCallbacks.ts b/webview/src/hooks/useWindowCallbacks.ts
-index 195854f9d42d0b384ba87737ba3b6b28e0303743..fa1304408f306fb40dbe24f67df5ce123e9b9f90 100644
+index 195854f9..fa130440 100644
 --- a/webview/src/hooks/useWindowCallbacks.ts
 +++ b/webview/src/hooks/useWindowCallbacks.ts
 @@ -15,6 +15,7 @@ import type { PlanApprovalRequest } from '../components/PlanApprovalDialog';
@@ -6394,7 +6402,7 @@ index 195854f9d42d0b384ba87737ba3b6b28e0303743..fa1304408f306fb40dbe24f67df5ce12
    setExpandedThinking?: React.Dispatch<React.SetStateAction<Record<string, boolean>>>;
    setStreamingActive: React.Dispatch<React.SetStateAction<boolean>>;
 diff --git a/webview/src/hooks/windowCallbacks/registerCallbacks.ts b/webview/src/hooks/windowCallbacks/registerCallbacks.ts
-index 926677cfedc4cf5fcce8f1df50a176c311a04e5e..7fdf7a00c1335e3149fa161354fef273adc6c2ec 100644
+index 926677cf..7fdf7a00 100644
 --- a/webview/src/hooks/windowCallbacks/registerCallbacks.ts
 +++ b/webview/src/hooks/windowCallbacks/registerCallbacks.ts
 @@ -72,6 +72,7 @@ export function registerWindowCallbacks(
@@ -6406,7 +6414,7 @@ index 926677cfedc4cf5fcce8f1df50a176c311a04e5e..7fdf7a00c1335e3149fa161354fef273
      setStreamingActive: options.setStreamingActive,
      isStreamingRef: options.isStreamingRef,
 diff --git a/webview/src/hooks/windowCallbacks/registerCallbacks/messageCallbacks.ts b/webview/src/hooks/windowCallbacks/registerCallbacks/messageCallbacks.ts
-index c7561d08ed87b5f74c2254cc75bfa765e8fffabb..87bfa5aa55a1013698bc0520f39470639959ed8c 100644
+index c7561d08..87bfa5aa 100644
 --- a/webview/src/hooks/windowCallbacks/registerCallbacks/messageCallbacks.ts
 +++ b/webview/src/hooks/windowCallbacks/registerCallbacks/messageCallbacks.ts
 @@ -9,6 +9,7 @@
@@ -6687,7 +6695,7 @@ index c7561d08ed87b5f74c2254cc75bfa765e8fffabb..87bfa5aa55a1013698bc0520f3947063
            && isStreamingRef.current
            && streamingMessageIndexRef.current >= 0) {
 diff --git a/webview/src/hooks/windowCallbacks/registerCallbacks/streamingCallbacks.ts b/webview/src/hooks/windowCallbacks/registerCallbacks/streamingCallbacks.ts
-index 1b971fe764a352a172b941402d78d95389f24bf5..8dc3e460c5496b2bb6ea609809d203a8a29fa6e0 100644
+index 1b971fe7..8dc3e460 100644
 --- a/webview/src/hooks/windowCallbacks/registerCallbacks/streamingCallbacks.ts
 +++ b/webview/src/hooks/windowCallbacks/registerCallbacks/streamingCallbacks.ts
 @@ -194,6 +194,7 @@ export function registerStreamingCallbacks(options: UseWindowCallbacksOptions):
@@ -6723,7 +6731,7 @@ index 1b971fe764a352a172b941402d78d95389f24bf5..8dc3e460c5496b2bb6ea609809d203a8
      // Idempotency guard: dual-path delivery (primary via flush callback +
      // fallback via Alarm) may send onStreamEnd twice for the same turn.
 diff --git a/webview/src/hooks/windowCallbacks/sessionTransition.ts b/webview/src/hooks/windowCallbacks/sessionTransition.ts
-index 30a4a9cbca9439d60e77a9412c3490adfeab4c4c..10a85f10a447ec7fc16392b5d68b1eddc50087b4 100644
+index 30a4a9cb..10a85f10 100644
 --- a/webview/src/hooks/windowCallbacks/sessionTransition.ts
 +++ b/webview/src/hooks/windowCallbacks/sessionTransition.ts
 @@ -8,12 +8,14 @@
@@ -6750,7 +6758,7 @@ index 30a4a9cbca9439d60e77a9412c3490adfeab4c4c..10a85f10a447ec7fc16392b5d68b1edd
      opts.setStreamingActive(false);
      opts.isStreamingRef.current = false;
 diff --git a/webview/src/i18n/locales/en.json b/webview/src/i18n/locales/en.json
-index 25641556cbcd76e76c13347a752c2d1302df45fc..f16ecd3501ec8ad075d82c4f677b9658a6cbc1b4 100644
+index 25641556..f16ecd35 100644
 --- a/webview/src/i18n/locales/en.json
 +++ b/webview/src/i18n/locales/en.json
 @@ -68,6 +68,11 @@
@@ -6766,7 +6774,7 @@ index 25641556cbcd76e76c13347a752c2d1302df45fc..f16ecd3501ec8ad075d82c4f677b9658
      "imagePreview": "Preview",
      "context": "Context",
 diff --git a/webview/src/i18n/locales/es.json b/webview/src/i18n/locales/es.json
-index 02d6b1d94b682e2f0e4c9f01ba9658445c36c3ae..2638557c65ac6acac06dd39a0df2910588579218 100644
+index 02d6b1d9..2638557c 100644
 --- a/webview/src/i18n/locales/es.json
 +++ b/webview/src/i18n/locales/es.json
 @@ -51,6 +51,11 @@
@@ -6782,7 +6790,7 @@ index 02d6b1d94b682e2f0e4c9f01ba9658445c36c3ae..2638557c65ac6acac06dd39a0df29105
      "imagePreview": "Vista previa",
      "context": "Contexto",
 diff --git a/webview/src/i18n/locales/fr.json b/webview/src/i18n/locales/fr.json
-index c09907b5e00555a24c88bf20fa7563e4dbed55a1..ff4fad78c8ce61f2ec2d9ed2b31b512b266256f9 100644
+index c09907b5..ff4fad78 100644
 --- a/webview/src/i18n/locales/fr.json
 +++ b/webview/src/i18n/locales/fr.json
 @@ -51,6 +51,11 @@
@@ -6798,7 +6806,7 @@ index c09907b5e00555a24c88bf20fa7563e4dbed55a1..ff4fad78c8ce61f2ec2d9ed2b31b512b
      "imagePreview": "Aperçu",
      "context": "Contexte",
 diff --git a/webview/src/i18n/locales/hi.json b/webview/src/i18n/locales/hi.json
-index e92bd8583973efa70f84942c9e7976dcd7f45315..9b23b83573a500733a5c16e5ff722fa9ace3d6e1 100644
+index e92bd858..9b23b835 100644
 --- a/webview/src/i18n/locales/hi.json
 +++ b/webview/src/i18n/locales/hi.json
 @@ -51,6 +51,11 @@
@@ -6814,7 +6822,7 @@ index e92bd8583973efa70f84942c9e7976dcd7f45315..9b23b83573a500733a5c16e5ff722fa9
      "imagePreview": "पूर्वावलोकन",
      "context": "संदर्भ",
 diff --git a/webview/src/i18n/locales/ja.json b/webview/src/i18n/locales/ja.json
-index 75d24055d8a580ed9f33c69883aad9befeb60e9f..de6a70e0d949d019ce6075e53351153a9488491a 100644
+index 75d24055..de6a70e0 100644
 --- a/webview/src/i18n/locales/ja.json
 +++ b/webview/src/i18n/locales/ja.json
 @@ -51,6 +51,11 @@
@@ -6830,7 +6838,7 @@ index 75d24055d8a580ed9f33c69883aad9befeb60e9f..de6a70e0d949d019ce6075e53351153a
      "imagePreview": "プレビュー",
      "context": "コンテキスト",
 diff --git a/webview/src/i18n/locales/ko.json b/webview/src/i18n/locales/ko.json
-index 3cd7890340a8a57d1095f41b2c286a6be4d95066..71132c6de019690c32ec4f0c50e7fa748f5eaec8 100644
+index 3cd78903..71132c6d 100644
 --- a/webview/src/i18n/locales/ko.json
 +++ b/webview/src/i18n/locales/ko.json
 @@ -51,6 +51,11 @@
@@ -6846,7 +6854,7 @@ index 3cd7890340a8a57d1095f41b2c286a6be4d95066..71132c6de019690c32ec4f0c50e7fa74
      "imagePreview": "미리보기",
      "context": "컨텍스트",
 diff --git a/webview/src/i18n/locales/pt-BR.json b/webview/src/i18n/locales/pt-BR.json
-index 4a3d3aae4d285bc47c96b8eda9445d3ba44f8543..159a25ebd39dc0ff7ab7651f367a8892632d0914 100644
+index 4a3d3aae..159a25eb 100644
 --- a/webview/src/i18n/locales/pt-BR.json
 +++ b/webview/src/i18n/locales/pt-BR.json
 @@ -51,6 +51,11 @@
@@ -6862,7 +6870,7 @@ index 4a3d3aae4d285bc47c96b8eda9445d3ba44f8543..159a25ebd39dc0ff7ab7651f367a8892
      "imagePreview": "Visualização",
      "context": "Contexto",
 diff --git a/webview/src/i18n/locales/ru.json b/webview/src/i18n/locales/ru.json
-index 9d26b015e5d4139f89064a4406cb34eaa32a05b1..4e18bfd388f634642ea81143b9f532d8db070c74 100644
+index 9d26b015..4e18bfd3 100644
 --- a/webview/src/i18n/locales/ru.json
 +++ b/webview/src/i18n/locales/ru.json
 @@ -51,6 +51,11 @@
@@ -6878,7 +6886,7 @@ index 9d26b015e5d4139f89064a4406cb34eaa32a05b1..4e18bfd388f634642ea81143b9f532d8
      "imagePreview": "Предпросмотр",
      "context": "Контекст",
 diff --git a/webview/src/i18n/locales/zh-TW.json b/webview/src/i18n/locales/zh-TW.json
-index 971c7f675c92068598864991f4686027ccb15ca2..1048f4f964b79b5d1d56545bcef7982714814929 100644
+index 971c7f67..1048f4f9 100644
 --- a/webview/src/i18n/locales/zh-TW.json
 +++ b/webview/src/i18n/locales/zh-TW.json
 @@ -51,6 +51,11 @@
@@ -6894,7 +6902,7 @@ index 971c7f675c92068598864991f4686027ccb15ca2..1048f4f964b79b5d1d56545bcef79827
      "imagePreview": "預覽",
      "context": "上下文",
 diff --git a/webview/src/i18n/locales/zh.json b/webview/src/i18n/locales/zh.json
-index 7292a409fc0c498579f00d02fd60b8e94a0cf992..e34b8cea3292e8fe435521a9907c975f65523b5e 100644
+index 7292a409..e34b8cea 100644
 --- a/webview/src/i18n/locales/zh.json
 +++ b/webview/src/i18n/locales/zh.json
 @@ -68,6 +68,11 @@
@@ -6910,7 +6918,7 @@ index 7292a409fc0c498579f00d02fd60b8e94a0cf992..e34b8cea3292e8fe435521a9907c975f
      "imagePreview": "预览",
      "context": "上下文",
 diff --git a/webview/src/styles/less/components/loading.less b/webview/src/styles/less/components/loading.less
-index 8e4caaba7a94f2aa61b1d72b9857f31d89f66271..33f1148980dd6b2ad1b1905fa40e3dce9f904911 100644
+index 8e4caaba..33f11489 100644
 --- a/webview/src/styles/less/components/loading.less
 +++ b/webview/src/styles/less/components/loading.less
 @@ -38,6 +38,27 @@
