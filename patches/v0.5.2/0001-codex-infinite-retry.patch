@@ -5601,7 +5601,7 @@ index cfc0d9a4..639f0a2a 100644
                                      javaScriptCalls.add((String) args[0]);
                                      return null;
 diff --git a/webview/src/App.tsx b/webview/src/App.tsx
-index 9bf73aba..ba5b0d31 100644
+index 9bf73aba..5482123b 100644
 --- a/webview/src/App.tsx
 +++ b/webview/src/App.tsx
 @@ -73,7 +73,7 @@ const App = () => {
@@ -5613,7 +5613,25 @@ index 9bf73aba..ba5b0d31 100644
      setIsThinking,
      streamingActive, setStreamingActive,
    } = useMessages();
-@@ -353,7 +353,7 @@ const App = () => {
+@@ -86,6 +86,7 @@ const App = () => {
+   const {
+     currentSessionId, setCurrentSessionId,
+     customSessionTitle, setCustomSessionTitle,
++    firstUserPrompt, setFirstUserPrompt,
+     historyData, setHistoryData,
+     currentSessionIdRef, customSessionTitleRef,
+   } = useSession();
+@@ -305,7 +306,8 @@ const App = () => {
+   } = useSessionManagement({
+     messages, loading, historyData, currentSessionId, currentSessionIdRef, currentProvider,
+     setHistoryData, setMessages, setCurrentView, setCurrentSessionId,
+-    setCustomSessionTitle, setUsagePercentage, setUsageUsedTokens, setUsageMaxTokens,
++    setCustomSessionTitle, setFirstUserPrompt,
++    setUsagePercentage, setUsageUsedTokens, setUsageMaxTokens,
+     setStatus, setLoading, setIsThinking, setStreamingActive,
+     setTaskEvents,
+     setSubagentHistories,
+@@ -353,7 +355,7 @@ const App = () => {
    // ── Window callbacks (bridge communication) ──
    useWindowCallbacks({
      t, addToast, clearToasts,
@@ -5622,6 +5640,25 @@ index 9bf73aba..ba5b0d31 100644
      setIsThinking, setStreamingActive, setHistoryData,
      setCurrentSessionId, setUsagePercentage, setUsageUsedTokens, setUsageMaxTokens,
      setPermissionMode, setCurrentProvider, setClaudePermissionMode, setCodexPermissionMode,
+@@ -383,7 +385,7 @@ const App = () => {
+     openContextUsageDialog, updateContextUsageData,
+     closeContextUsageDialog,
+     customSessionTitleRef, currentSessionIdRef, updateHistoryTitle, applyHistoryTitleLocal,
+-    setCustomSessionTitle,
++    setCustomSessionTitle, setFirstUserPrompt,
+     setPermissionDialogTimeoutSeconds,
+   });
+ 
+@@ -471,7 +473,8 @@ const App = () => {
+     fileChangeMgmt,
+     filteredFileChanges, subagents, globalTodos, rewindableMessages, sessionTitle,
+   } = useChatComputations({
+-    t, messages, mergedMessages, subagentHistories, customSessionTitle, streamingActive, currentProvider,
++    t, messages, mergedMessages, subagentHistories, customSessionTitle, firstUserPrompt,
++    streamingActive, currentProvider,
+     currentSessionId, currentSessionIdRef,
+     getMessageText, getContentBlocks,
+   });
 diff --git a/webview/src/components/ChatScreen.tsx b/webview/src/components/ChatScreen.tsx
 index 1723b1fa..5b8c418e 100644
 --- a/webview/src/components/ChatScreen.tsx
@@ -6064,20 +6101,69 @@ index e71c53d6..3003f8c5 100644
    );
  
    return <MessagesContext.Provider value={value}>{children}</MessagesContext.Provider>;
+diff --git a/webview/src/contexts/SessionContext.tsx b/webview/src/contexts/SessionContext.tsx
+index a009491e..63fb9ffe 100644
+--- a/webview/src/contexts/SessionContext.tsx
++++ b/webview/src/contexts/SessionContext.tsx
+@@ -6,6 +6,8 @@ export interface SessionContextValue {
+   setCurrentSessionId: React.Dispatch<React.SetStateAction<string | null>>;
+   customSessionTitle: string | null;
+   setCustomSessionTitle: React.Dispatch<React.SetStateAction<string | null>>;
++  firstUserPrompt: string | null;
++  setFirstUserPrompt: React.Dispatch<React.SetStateAction<string | null>>;
+   historyData: HistoryData | null;
+   setHistoryData: React.Dispatch<React.SetStateAction<HistoryData | null>>;
+   /** Stale-closure guard: always reflects latest currentSessionId without triggering re-render. */
+@@ -25,6 +27,7 @@ const SessionContext = createContext<SessionContextValue | null>(null);
+ export function SessionProvider({ children }: { children: ReactNode }) {
+   const [currentSessionId, setCurrentSessionId] = useState<string | null>(null);
+   const [customSessionTitle, setCustomSessionTitle] = useState<string | null>(null);
++  const [firstUserPrompt, setFirstUserPrompt] = useState<string | null>(null);
+   const [historyData, setHistoryData] = useState<HistoryData | null>(null);
+ 
+   const currentSessionIdRef = useRef<string | null>(currentSessionId);
+@@ -39,12 +42,14 @@ export function SessionProvider({ children }: { children: ReactNode }) {
+       setCurrentSessionId,
+       customSessionTitle,
+       setCustomSessionTitle,
++      firstUserPrompt,
++      setFirstUserPrompt,
+       historyData,
+       setHistoryData,
+       currentSessionIdRef,
+       customSessionTitleRef,
+     }),
+-    [currentSessionId, customSessionTitle, historyData],
++    [currentSessionId, customSessionTitle, firstUserPrompt, historyData],
+   );
+ 
+   return <SessionContext.Provider value={value}>{children}</SessionContext.Provider>;
 diff --git a/webview/src/global.d.ts b/webview/src/global.d.ts
-index e626fb1e..847135d7 100644
+index e626fb1e..af50d5fe 100644
 --- a/webview/src/global.d.ts
 +++ b/webview/src/global.d.ts
-@@ -36,6 +36,8 @@ interface Window {
+@@ -30,12 +30,19 @@ interface Window {
+   /**
+    * Update messages from backend
+    */
+-  updateMessages?: (json: string, sequence?: string | number) => void;
++  updateMessages?: (
++    json: string,
++    sequence?: string | number,
++    firstUserPrompt?: string,
++  ) => void;
+   /** Replace a long conversation's tail without resending its unchanged prefix. */
+   updateMessageTail?: (
      json: string,
      baseIndex: string | number,
      sequence?: string | number,
 +    assistantAnchorJson?: string,
 +    assistantAnchorIndex?: string | number,
++    firstUserPrompt?: string,
    ) => void;
  
    /**
-@@ -53,6 +55,8 @@ interface Window {
+@@ -53,6 +60,8 @@ interface Window {
     */
    showLoading?: (value: string | boolean) => void;
  
@@ -6086,7 +6172,15 @@ index e626fb1e..847135d7 100644
    /**
     * Show thinking status
     */
-@@ -883,6 +887,8 @@ interface Window {
+@@ -121,6 +130,7 @@ interface Window {
+     hasMore: boolean;
+     loadedMessageCount: number;
+     cursorReset?: boolean;
++    firstUserPrompt?: string;
+   };
+ 
+   /**
+@@ -883,6 +893,8 @@ interface Window {
    __prependedHistoryMessageCount?: number;
    /** Backend index represented by the first non-prepended message; zero means its full prefix is present. */
    __messageBaseIndex?: number;
@@ -6095,8 +6189,21 @@ index e626fb1e..847135d7 100644
    /** Cancel pending rAF-deferred updateMessages (set by messageCallbacks, called by onStreamEnd). */
    __cancelPendingUpdateMessages?: () => void;
  
+@@ -1013,7 +1025,11 @@ interface Window {
+   /**
+    * Pending updateMessages payload before React initialization
+    */
+-  __pendingUpdateMessages?: string | { json: string; sequence?: number | null };
++  __pendingUpdateMessages?: string | {
++    json: string;
++    sequence?: number | null;
++    firstUserPrompt?: string;
++  };
+ 
+   /**
+    * Pending status text before React initialization
 diff --git a/webview/src/hooks/useChatComputations.test.ts b/webview/src/hooks/useChatComputations.test.ts
-index 27cda490..744a721f 100644
+index 27cda490..73d7e2ab 100644
 --- a/webview/src/hooks/useChatComputations.test.ts
 +++ b/webview/src/hooks/useChatComputations.test.ts
 @@ -1,7 +1,9 @@
@@ -6110,13 +6217,56 @@ index 27cda490..744a721f 100644
  
  interface TestMessage extends ClaudeMessage {
    __blocks?: ClaudeContentBlock[];
-@@ -104,3 +106,36 @@ describe('deriveTodosForTurn', () => {
+@@ -104,3 +106,80 @@ describe('deriveTodosForTurn', () => {
      ]);
    });
  });
 +
 +describe('session title', () => {
-+  it('skips tool-result carrier messages when choosing the first user prompt', () => {
++  it('uses the complete canonical prompt when the visible window starts later', () => {
++    const completeFirstPrompt =
++      'The complete original question is longer than fifty characters and must remain intact';
++    const messages = [user('later retained question')];
++
++    const { result } = renderHook(() => useChatComputations({
++      t: ((key: string) => key) as TFunction,
++      messages,
++      mergedMessages: messages,
++      subagentHistories: {},
++      customSessionTitle: null,
++      firstUserPrompt: completeFirstPrompt,
++      streamingActive: false,
++      currentProvider: 'codex',
++      currentSessionId: null,
++      currentSessionIdRef: { current: null },
++      getMessageText: (message) => message.content ?? '',
++      getContentBlocks: () => [],
++    }));
++
++    expect(result.current.sessionTitle).toBe(completeFirstPrompt);
++  });
++
++  it('prefers an explicit title over the canonical prompt', () => {
++    const messages = [user('later retained question')];
++    const { result } = renderHook(() => useChatComputations({
++      t: ((key: string) => key) as TFunction,
++      messages,
++      mergedMessages: messages,
++      subagentHistories: {},
++      customSessionTitle: 'Explicit title',
++      firstUserPrompt: 'Original first question',
++      streamingActive: false,
++      currentProvider: 'codex',
++      currentSessionId: null,
++      currentSessionIdRef: { current: null },
++      getMessageText: (message) => message.content ?? '',
++      getContentBlocks: () => [],
++    }));
++
++    expect(result.current.sessionTitle).toBe('Explicit title');
++  });
++
++  it('does not derive a fallback title from the bounded visible messages', () => {
 +    const toolResult = {
 +      type: 'user',
 +      content: '[tool_result]',
@@ -6136,6 +6286,7 @@ index 27cda490..744a721f 100644
 +      mergedMessages: messages,
 +      subagentHistories: {},
 +      customSessionTitle: null,
++      firstUserPrompt: null,
 +      streamingActive: false,
 +      currentProvider: 'codex',
 +      currentSessionId: null,
@@ -6144,34 +6295,193 @@ index 27cda490..744a721f 100644
 +      getContentBlocks: () => [],
 +    }));
 +
-+    expect(result.current.sessionTitle).toBe('Fix tab title');
++    expect(result.current.sessionTitle).toBe('common.newSession');
 +  });
 +});
 diff --git a/webview/src/hooks/useChatComputations.ts b/webview/src/hooks/useChatComputations.ts
-index c170822e..7d3fb9e0 100644
+index c170822e..cf084519 100644
 --- a/webview/src/hooks/useChatComputations.ts
 +++ b/webview/src/hooks/useChatComputations.ts
-@@ -21,6 +21,7 @@ import {
+@@ -11,11 +11,6 @@ import type {
+ import type { GetToolResultRawFn } from '../contexts/SubagentContext';
+ import type { RewindableMessage } from '../components/RewindSelectDialog';
+ import { formatTime } from '../utils/helpers';
+-import {
+-  containsAnyTag,
+-  hasTaskNotificationTag,
+-  INTERNAL_METADATA_TAGS,
+-} from '../utils/messageUtils';
+ import { extractTodosFromToolUse, extractAccumulatedTasks } from '../utils/todoToolNormalization';
+ import {
    computeStatusScopeMessages,
-   finalizeSubagentsForSettledTurn,
-   finalizeTodosForSettledTurn,
-+  isToolResultOnlyUserMessage,
-   sliceLatestConversationTurn,
- } from '../utils/turnScope';
- import { FILE_MODIFY_TOOL_NAMES, isToolName } from '../utils/toolConstants';
-@@ -272,6 +273,7 @@ export function useChatComputations({
-     let text = '';
-     for (const message of messages) {
-       if (message.type !== 'user') continue;
-+      if (isToolResultOnlyUserMessage(message)) continue;
-       const raw = message.raw;
-       if (raw && typeof raw === 'object' && raw.isMeta === true) continue;
-       const candidate = getMessageText(message).trim();
+@@ -35,6 +30,7 @@ interface UseChatComputationsParams {
+   mergedMessages: ClaudeMessage[];
+   subagentHistories: Record<string, SubagentHistoryResponse>;
+   customSessionTitle: string | null;
++  firstUserPrompt: string | null;
+   streamingActive: boolean;
+   currentProvider: string;
+   currentSessionId: string | null;
+@@ -103,6 +99,7 @@ export function useChatComputations({
+   mergedMessages,
+   subagentHistories,
+   customSessionTitle,
++  firstUserPrompt,
+   streamingActive,
+   currentProvider,
+   currentSessionId,
+@@ -264,26 +261,12 @@ export function useChatComputations({
+   }, [mergedMessages, currentProvider, canRewindFromMessageIndex, getMessageText]);
+ 
+   const sessionTitle = useMemo(() => {
+-    if (customSessionTitle) return customSessionTitle;
+-    if (messages.length === 0) return t('common.newSession');
+-    // Pick the first REAL prompt: skip meta/caveat messages and anything whose
+-    // text is raw internal XML (e.g. <local-command-caveat>) so the tag is
+-    // never leaked as the session title.
+-    let text = '';
+-    for (const message of messages) {
+-      if (message.type !== 'user') continue;
+-      const raw = message.raw;
+-      if (raw && typeof raw === 'object' && raw.isMeta === true) continue;
+-      const candidate = getMessageText(message).trim();
+-      if (!candidate) continue;
+-      if (candidate.startsWith('<')) continue;
+-      if (containsAnyTag(candidate, INTERNAL_METADATA_TAGS) || hasTaskNotificationTag(candidate)) continue;
+-      text = candidate;
+-      break;
+-    }
+-    if (!text) return t('common.newSession');
+-    return text.length > 15 ? `${text.substring(0, 15)}...` : text;
+-  }, [customSessionTitle, messages, t, getMessageText]);
++    const explicit = customSessionTitle?.trim();
++    if (explicit) return explicit;
++    const canonical = firstUserPrompt?.trim();
++    if (canonical) return canonical;
++    return t('common.newSession');
++  }, [customSessionTitle, firstUserPrompt, t]);
+ 
+   return {
+     findToolResult,
+diff --git a/webview/src/hooks/useSessionManagement.test.ts b/webview/src/hooks/useSessionManagement.test.ts
+index 7ea1b595..4a20b29f 100644
+--- a/webview/src/hooks/useSessionManagement.test.ts
++++ b/webview/src/hooks/useSessionManagement.test.ts
+@@ -11,6 +11,7 @@ describe('useSessionManagement', () => {
+     setCurrentView: vi.fn(),
+     setCurrentSessionId: vi.fn(),
+     setCustomSessionTitle: vi.fn(),
++    setFirstUserPrompt: vi.fn(),
+     setUsagePercentage: vi.fn(),
+     setUsageUsedTokens: vi.fn(),
+     setUsageMaxTokens: vi.fn(),
+@@ -61,6 +62,7 @@ describe('useSessionManagement', () => {
+     expect(mocks.setMessages).toHaveBeenCalledWith([]);
+     expect(mocks.setCurrentSessionId).toHaveBeenCalledWith(null);
+     expect(mocks.setCustomSessionTitle).toHaveBeenCalledWith(null);
++    expect(mocks.setFirstUserPrompt).toHaveBeenCalledWith(null);
+     expect(mocks.setUsagePercentage).toHaveBeenCalledWith(0);
+     expect(mocks.setUsageUsedTokens).toHaveBeenCalledWith(undefined);
+     expect(window.sendToJava).toHaveBeenCalledWith('create_new_session:');
+@@ -591,6 +593,7 @@ describe('useSessionManagement', () => {
+         {
+           sessionId: 'hist-codex',
+           title: 'Codex Session',
++          hasCustomTitle: false,
+           provider: 'codex',
+           model: 'gpt-5.4',
+           messageCount: 2,
+@@ -620,6 +623,36 @@ describe('useSessionManagement', () => {
+     expect(window.sendToJava).toHaveBeenCalledWith(
+       'load_session:{"sessionId":"hist-codex","provider":"codex","model":"gpt-5.4"}'
+     );
++    expect(mocks.setCustomSessionTitle).toHaveBeenCalledWith(null);
++    expect(mocks.setFirstUserPrompt).toHaveBeenCalledWith(null);
++  });
++
++  it('uses a marked Codex custom title as the explicit override', () => {
++    const historyData = {
++      success: true,
++      sessions: [{
++        sessionId: 'hist-codex-custom',
++        title: 'Persisted explicit title',
++        hasCustomTitle: true,
++        provider: 'codex',
++        messageCount: 2,
++      }],
++      total: 1,
++    } as HistoryData;
++    const mocks = createMocks();
++    const { result } = renderHook(() => useSessionManagement({
++      messages: [],
++      loading: false,
++      historyData,
++      currentSessionId: null,
++      ...mocks,
++      t,
++    }));
++
++    act(() => result.current.loadHistorySession('hist-codex-custom'));
++
++    expect(mocks.setCustomSessionTitle).toHaveBeenCalledWith('Persisted explicit title');
++    expect(mocks.setFirstUserPrompt).toHaveBeenCalledWith(null);
+   });
+ 
+   it('loadHistorySession falls back to current provider when history item has no provider', () => {
+diff --git a/webview/src/hooks/useSessionManagement.ts b/webview/src/hooks/useSessionManagement.ts
+index 4b4a8eab..9461f3c1 100644
+--- a/webview/src/hooks/useSessionManagement.ts
++++ b/webview/src/hooks/useSessionManagement.ts
+@@ -24,6 +24,7 @@ interface UseSessionManagementOptions {
+   setCurrentView: (view: ViewMode) => void;
+   setCurrentSessionId: (id: string | null) => void;
+   setCustomSessionTitle: (title: string | null) => void;
++  setFirstUserPrompt: (prompt: string | null) => void;
+   setUsagePercentage: (percent: number) => void;
+   setUsageUsedTokens: (tokens: number | undefined) => void;
+   setUsageMaxTokens: (tokens: number | undefined) => void;
+@@ -81,6 +82,7 @@ export function useSessionManagement({
+   setCurrentView,
+   setCurrentSessionId,
+   setCustomSessionTitle,
++  setFirstUserPrompt,
+   setUsagePercentage,
+   setUsageUsedTokens,
+   setUsageMaxTokens,
+@@ -146,6 +148,7 @@ export function useSessionManagement({
+     }
+     setCurrentSessionId(nextSessionId);
+     setCustomSessionTitle(nextTitle);
++    setFirstUserPrompt(null);
+     setUsagePercentage(0);
+     setUsageUsedTokens(undefined);
+     setUsageMaxTokens(undefined);
+@@ -168,7 +171,7 @@ export function useSessionManagement({
+         window.__sessionTransitionToken = null;
+       }
+     }, 15_000); // 15 seconds — generous enough for slow history loads
+-  }, [clearToasts, currentSessionIdRef, setStatus, setLoadingState, setIsThinking, setStreamingActive, setMessages, setCurrentSessionId, setCustomSessionTitle, setUsagePercentage, setUsageUsedTokens, setUsageMaxTokens, setTaskEvents, setSubagentHistories]);
++  }, [clearToasts, currentSessionIdRef, setStatus, setLoadingState, setIsThinking, setStreamingActive, setMessages, setCurrentSessionId, setCustomSessionTitle, setFirstUserPrompt, setUsagePercentage, setUsageUsedTokens, setUsageMaxTokens, setTaskEvents, setSubagentHistories]);
+ 
+   // Create new session
+   const createNewSession = useCallback(() => {
+@@ -293,7 +296,10 @@ export function useSessionManagement({
+     if (loading) {
+       sendBridgeEvent('interrupt_session');
+     }
+-    beginSessionTransition(sessionId, session?.title ?? null);
++    const explicitTitle = effectiveProvider === 'codex'
++      ? (session?.hasCustomTitle ? session.title : null)
++      : (session?.title ?? null);
++    beginSessionTransition(sessionId, explicitTitle);
+     sendBridgeEvent('load_session', JSON.stringify({
+       sessionId,
+       provider: effectiveProvider,
 diff --git a/webview/src/hooks/useWindowCallbacks.test.ts b/webview/src/hooks/useWindowCallbacks.test.ts
-index 4ff94336..9db7d026 100644
+index 4ff94336..b482d226 100644
 --- a/webview/src/hooks/useWindowCallbacks.test.ts
 +++ b/webview/src/hooks/useWindowCallbacks.test.ts
-@@ -30,6 +30,7 @@ describe('useWindowCallbacks integration', () => {
+@@ -30,12 +30,14 @@ describe('useWindowCallbacks integration', () => {
      setStatus: vi.fn(),
      setLoading: vi.fn(),
      setLoadingStartTime: vi.fn(),
@@ -6179,7 +6489,14 @@ index 4ff94336..9db7d026 100644
      setIsThinking: vi.fn(),
      setExpandedThinking: vi.fn(),
      setStreamingActive: vi.fn(),
-@@ -116,6 +117,7 @@ describe('useWindowCallbacks integration', () => {
+     setHistoryData: vi.fn(),
+     setCurrentSessionId: vi.fn(),
+     setCustomSessionTitle: vi.fn(),
++    setFirstUserPrompt: vi.fn(),
+     setUsagePercentage: vi.fn(),
+     setUsageUsedTokens: vi.fn(),
+     setUsageMaxTokens: vi.fn(),
+@@ -116,6 +118,7 @@ describe('useWindowCallbacks integration', () => {
      window.__minAcceptedUpdateSequence = 0;
      window.__prependedHistoryMessageCount = 0;
      window.__messageBaseIndex = 0;
@@ -6187,7 +6504,95 @@ index 4ff94336..9db7d026 100644
      window.__pendingSessionTransitionToast = undefined;
      window.__deniedToolIds = new Set();
      window.sendToJava = vi.fn();
-@@ -698,6 +700,8 @@ describe('useWindowCallbacks integration', () => {
+@@ -132,6 +135,7 @@ describe('useWindowCallbacks integration', () => {
+     delete window.__lastAcceptedMessageCount;
+     delete window.__pendingHistoryRefreshMessageCount;
+     delete window.__pendingHistoryLoadComplete;
++    delete window.__pendingUpdateMessages;
+     delete window.__historySurfaceRefreshEpoch;
+     vi.mocked(forceWebviewRepaint).mockClear();
+     window.__dependencyStatusState = 'pending';
+@@ -478,6 +482,47 @@ describe('useWindowCallbacks integration', () => {
+ 
+   // ===== updateMessages is blocked during transition =====
+ 
++  it('accepts canonical prompt metadata once from full and tail callbacks', () => {
++    const opts = createOptions();
++    renderHook(() => useWindowCallbacks(opts));
++
++    act(() => window.updateMessages!(
++      JSON.stringify([{ type: 'user', content: 'later' }]),
++      7,
++      '  original first question  ',
++    ));
++    act(() => window.updateMessageTail!(
++      JSON.stringify([{ type: 'user', content: 'later tail' }]),
++      220,
++      8,
++      '',
++      '',
++      'replacement question',
++    ));
++
++    expect(opts.setFirstUserPrompt).toHaveBeenCalledTimes(2);
++    const firstSetter = (opts.setFirstUserPrompt as any).mock.calls[0][0] as
++      (current: string | null) => string | null;
++    const secondSetter = (opts.setFirstUserPrompt as any).mock.calls[1][0] as
++      (current: string | null) => string | null;
++    expect(firstSetter(null)).toBe('original first question');
++    expect(secondSetter('original first question')).toBe('original first question');
++  });
++
++  it('rejects canonical prompt metadata from a stale update sequence', () => {
++    const opts = createOptions();
++    window.__minAcceptedUpdateSequence = 9;
++    renderHook(() => useWindowCallbacks(opts));
++
++    act(() => window.updateMessages!(
++      JSON.stringify([{ type: 'user', content: 'stale' }]),
++      8,
++      'stale original question',
++    ));
++
++    expect(opts.setFirstUserPrompt).not.toHaveBeenCalled();
++  });
++
+   it('updateMessages is silently dropped while __sessionTransitioning is true', () => {
+     const opts = createOptions();
+     renderHook(() => useWindowCallbacks(opts));
+@@ -556,8 +601,10 @@ describe('useWindowCallbacks integration', () => {
+     window.__pendingUpdateMessages = {
+       json: JSON.stringify(restoredMessages),
+       sequence: 1,
++      firstUserPrompt: 'early original question',
+     };
+     window.__pendingHistoryLoadComplete = { expectedMessageCount: 1 };
++    const setFirstUserPrompt = vi.fn();
+     let domTextWhenAcknowledged = '';
+     window.sendToJava = vi.fn((payload: string) => {
+       if (payload === 'history_dom_committed:1') {
+@@ -567,7 +614,7 @@ describe('useWindowCallbacks integration', () => {
+ 
+     const HistoryHarness = () => {
+       const [messages, setMessages] = useState<ClaudeMessage[]>([]);
+-      useWindowCallbacks(createOptions({ setMessages }));
++      useWindowCallbacks(createOptions({ setMessages, setFirstUserPrompt }));
+       return createElement(
+         'div',
+         { 'data-testid': 'history-dom' },
+@@ -577,6 +624,11 @@ describe('useWindowCallbacks integration', () => {
+ 
+     render(createElement(HistoryHarness));
+ 
++    expect(setFirstUserPrompt).toHaveBeenCalledTimes(1);
++    const promptSetter = setFirstUserPrompt.mock.calls[0][0] as
++      (current: string | null) => string | null;
++    expect(promptSetter(null)).toBe('early original question');
++
+     await waitFor(() => {
+       expect(domTextWhenAcknowledged).toContain('restored before callback registration');
+     });
+@@ -698,6 +750,8 @@ describe('useWindowCallbacks integration', () => {
      ]);
      opts.currentSessionIdRef.current = 'session-1';
      window.__prependedHistoryMessageCount = 1;
@@ -6196,16 +6601,39 @@ index 4ff94336..9db7d026 100644
      renderHook(() => useWindowCallbacks(opts));
  
      act(() => {
-@@ -715,6 +719,8 @@ describe('useWindowCallbacks integration', () => {
+@@ -710,11 +764,18 @@ describe('useWindowCallbacks integration', () => {
+       window.completeCodexHistoryPage!(JSON.stringify({
+         pageId: 'page-replace', sessionId: 'session-1', mode: 'replace',
+         fromTurn: 0, toTurn: 1, totalTurns: 1, hasMore: false, loadedMessageCount: 1,
++        firstUserPrompt: 'original restored question',
+       }));
+     });
  
      expect(buffer.current.map(message => message.content)).toEqual(['replacement']);
      expect(window.__prependedHistoryMessageCount).toBe(0);
 +    expect(window.__messageBaseIndex).toBe(0);
 +    expect(window.__messageSparseAssistantAnchorIndex).toBeUndefined();
++    expect(opts.setFirstUserPrompt).toHaveBeenCalledTimes(1);
++    const promptSetter = (opts.setFirstUserPrompt as any).mock.calls[0][0] as
++      (current: string | null) => string | null;
++    expect(promptSetter(null)).toBe('original restored question');
    });
  
    it('keeps the streaming assistant index aligned when history is prepended', () => {
-@@ -819,6 +825,103 @@ describe('useWindowCallbacks integration', () => {
+@@ -766,10 +827,12 @@ describe('useWindowCallbacks integration', () => {
+       window.completeCodexHistoryPage!(JSON.stringify({
+         pageId: 'page-old', sessionId: 'session-old', mode: 'prepend',
+         fromTurn: 0, toTurn: 30, totalTurns: 60, hasMore: false, loadedMessageCount: 1,
++        firstUserPrompt: 'stale original question',
+       }));
+     });
+ 
+     expect(buffer.current.map(message => message.content)).toEqual(['current']);
++    expect(opts.setFirstUserPrompt).not.toHaveBeenCalled();
+   });
+ 
+   it('rejects a non-contiguous Codex history page and allows the UI to retry', () => {
+@@ -819,6 +882,103 @@ describe('useWindowCallbacks integration', () => {
      expect(window.__minAcceptedUpdateSequence).toBe(7);
    });
  
@@ -6309,7 +6737,7 @@ index 4ff94336..9db7d026 100644
    it('keeps prepended history aligned when patching the backend tail', () => {
      const initial = Array.from({ length: 400 }, (_, index): ClaudeMessage => ({
        type: index % 2 === 0 ? 'user' : 'assistant',
-@@ -959,6 +1062,43 @@ describe('useWindowCallbacks integration', () => {
+@@ -959,6 +1119,43 @@ describe('useWindowCallbacks integration', () => {
      expect(window.__messageBaseIndex).toBe(170);
    });
  
@@ -6353,7 +6781,7 @@ index 4ff94336..9db7d026 100644
    it('ignores stale or invalid long-conversation tail updates', () => {
      const { opts, buffer } = createOptsWithMessages([
        { type: 'user', content: 'current' },
-@@ -981,9 +1121,14 @@ describe('useWindowCallbacks integration', () => {
+@@ -981,9 +1178,14 @@ describe('useWindowCallbacks integration', () => {
    it('resets the tail base when a full snapshot arrives', () => {
      const { opts, buffer } = createOptsWithMessages([]);
      renderHook(() => useWindowCallbacks(opts));
@@ -6371,7 +6799,7 @@ index 4ff94336..9db7d026 100644
  
      act(() => window.updateMessages!(JSON.stringify([
        { type: 'user', content: 'full-user' },
-@@ -992,6 +1137,7 @@ describe('useWindowCallbacks integration', () => {
+@@ -992,6 +1194,7 @@ describe('useWindowCallbacks integration', () => {
  
      expect(buffer.current.map((message) => message.content)).toEqual(['full-user', 'full-answer']);
      expect(window.__messageBaseIndex).toBe(0);
@@ -6379,7 +6807,7 @@ index 4ff94336..9db7d026 100644
    });
  
    it('patchMessageUuid updates the latest unresolved user message using raw text fallback', () => {
-@@ -1181,6 +1327,8 @@ describe('useWindowCallbacks integration', () => {
+@@ -1181,6 +1384,8 @@ describe('useWindowCallbacks integration', () => {
      });
      renderHook(() => useWindowCallbacks(opts));
      window.__prependedHistoryMessageCount = 12;
@@ -6388,7 +6816,7 @@ index 4ff94336..9db7d026 100644
  
      act(() => {
        window.clearMessages!();
-@@ -1196,6 +1344,137 @@ describe('useWindowCallbacks integration', () => {
+@@ -1196,6 +1401,137 @@ describe('useWindowCallbacks integration', () => {
      expect(streamingContentRef.current).toBe('');
      expect(streamingMessageIndexRef.current).toBe(-1);
      expect(window.__prependedHistoryMessageCount).toBe(0);
@@ -6527,7 +6955,7 @@ index 4ff94336..9db7d026 100644
  
    // ===== clearMessages forces a webview repaint to clear JCEF ghosting =====
 diff --git a/webview/src/hooks/useWindowCallbacks.ts b/webview/src/hooks/useWindowCallbacks.ts
-index 195854f9..fa130440 100644
+index 195854f9..aee386d3 100644
 --- a/webview/src/hooks/useWindowCallbacks.ts
 +++ b/webview/src/hooks/useWindowCallbacks.ts
 @@ -15,6 +15,7 @@ import type { PlanApprovalRequest } from '../components/PlanApprovalDialog';
@@ -6538,7 +6966,7 @@ index 195854f9..fa130440 100644
  
  // Re-export from messageSync to avoid duplicate definition
  export { OPTIMISTIC_MESSAGE_TIME_WINDOW } from './windowCallbacks/messageSync';
-@@ -36,6 +37,7 @@ export interface UseWindowCallbacksOptions {
+@@ -36,11 +37,13 @@ export interface UseWindowCallbacksOptions {
    setStatus: React.Dispatch<React.SetStateAction<string>>;
    setLoading: React.Dispatch<React.SetStateAction<boolean>>;
    setLoadingStartTime: React.Dispatch<React.SetStateAction<number | null>>;
@@ -6546,6 +6974,12 @@ index 195854f9..fa130440 100644
    setIsThinking: React.Dispatch<React.SetStateAction<boolean>>;
    setExpandedThinking?: React.Dispatch<React.SetStateAction<Record<string, boolean>>>;
    setStreamingActive: React.Dispatch<React.SetStateAction<boolean>>;
+   setHistoryData: React.Dispatch<React.SetStateAction<HistoryData | null>>;
+   setCurrentSessionId: React.Dispatch<React.SetStateAction<string | null>>;
++  setFirstUserPrompt: React.Dispatch<React.SetStateAction<string | null>>;
+   setUsagePercentage: React.Dispatch<React.SetStateAction<number>>;
+   setUsageUsedTokens: React.Dispatch<React.SetStateAction<number | undefined>>;
+   setUsageMaxTokens: React.Dispatch<React.SetStateAction<number | undefined>>;
 diff --git a/webview/src/hooks/windowCallbacks/registerCallbacks.ts b/webview/src/hooks/windowCallbacks/registerCallbacks.ts
 index 926677cf..7fdf7a00 100644
 --- a/webview/src/hooks/windowCallbacks/registerCallbacks.ts
@@ -6559,7 +6993,7 @@ index 926677cf..7fdf7a00 100644
      setStreamingActive: options.setStreamingActive,
      isStreamingRef: options.isStreamingRef,
 diff --git a/webview/src/hooks/windowCallbacks/registerCallbacks/messageCallbacks.ts b/webview/src/hooks/windowCallbacks/registerCallbacks/messageCallbacks.ts
-index c7561d08..87bfa5aa 100644
+index c7561d08..182a3676 100644
 --- a/webview/src/hooks/windowCallbacks/registerCallbacks/messageCallbacks.ts
 +++ b/webview/src/hooks/windowCallbacks/registerCallbacks/messageCallbacks.ts
 @@ -9,6 +9,7 @@
@@ -6680,7 +7114,24 @@ index c7561d08..87bfa5aa 100644
      setIsThinking,
      setHistoryData,
      userPausedRef,
-@@ -212,10 +309,12 @@ export function registerMessageCallbacks(
+@@ -93,8 +190,16 @@ export function registerMessageCallbacks(
+     updateContextUsageData,
+     closeContextUsageDialog,
+     currentSessionIdRef,
++    setFirstUserPrompt,
+   } = options;
+ 
++  const acceptFirstUserPrompt = (value?: string): void => {
++    if (typeof value !== 'string') return;
++    const normalized = value.trim();
++    if (!normalized) return;
++    setFirstUserPrompt((current) => current || normalized);
++  };
++
+   const ensureStreamingAssistantPreserved = (prevList: ClaudeMessage[], resultList: ClaudeMessage[]): ClaudeMessage[] => {
+     const { list, streamingIndex } = ensureStreamingAssistantInList(
+       prevList,
+@@ -212,10 +317,12 @@ export function registerMessageCallbacks(
        const raw = JSON.parse(json) as unknown;
        if (!Array.isArray(raw)) return;
        const backendMessages = raw as ClaudeMessage[];
@@ -6693,16 +7144,23 @@ index c7561d08..87bfa5aa 100644
  
        setMessages((prev) => {
          const prependedCount = getPrependedHistoryMessageCount(prev.length);
-@@ -441,6 +540,8 @@ export function registerMessageCallbacks(
+@@ -441,11 +548,15 @@ export function registerMessageCallbacks(
      json: string,
      baseIndexArg: string | number,
      sequenceArg?: string | number,
 +    assistantAnchorJson?: string,
 +    assistantAnchorIndex?: string | number,
++    firstUserPrompt?: string,
    ) => {
      if (window.__sessionTransitioning) return;
      const sequence = parseSequence(sequenceArg);
-@@ -459,25 +560,80 @@ export function registerMessageCallbacks(
+     const minAcceptedSequence = window.__minAcceptedUpdateSequence ?? 0;
+     if (sequence != null && sequence < minAcceptedSequence) return;
++    acceptFirstUserPrompt(firstUserPrompt);
+ 
+     if (isStreamingRef.current && window.__lastStreamActivityAt !== undefined) {
+       window.__lastStreamActivityAt = Date.now();
+@@ -459,25 +570,81 @@ export function registerMessageCallbacks(
      try {
        const tail = JSON.parse(json) as ClaudeMessage[];
        if (!Array.isArray(tail)) return;
@@ -6713,6 +7171,7 @@ index c7561d08..87bfa5aa 100644
 +        : Number(assistantAnchorIndex);
 +      if (
 +        typeof assistantAnchorJson === 'string' &&
++        assistantAnchorJson.trim().length > 0 &&
 +        Number.isSafeInteger(anchorIndex) &&
 +        anchorIndex >= 0 &&
 +        anchorIndex < baseIndex
@@ -6790,7 +7249,43 @@ index c7561d08..87bfa5aa 100644
  
          merged = appendOptimisticMessageIfMissing(prev, merged);
          merged = preserveLastAssistantIdentity(prev, merged, findLastAssistantIndex);
-@@ -598,6 +754,13 @@ export function registerMessageCallbacks(
+@@ -515,7 +682,7 @@ export function registerMessageCallbacks(
+     }
+   };
+ 
+-  window.updateMessages = (json, sequenceArg) => {
++  window.updateMessages = (json, sequenceArg, firstUserPrompt) => {
+     // During session transition, ignore message updates from stale session
+     // callbacks to prevent cleared messages from being restored
+     if (window.__sessionTransitioning) return;
+@@ -524,6 +691,7 @@ export function registerMessageCallbacks(
+     if (sequence != null && sequence < minAcceptedSequence) {
+       return;
+     }
++    acceptFirstUserPrompt(firstUserPrompt);
+ 
+     // FIX: Bump stream stall watchdog — receiving updateMessages proves the
+     // backend→frontend bridge is alive even between content deltas (e.g.,
+@@ -584,8 +752,16 @@ export function registerMessageCallbacks(
+     typeof (pendingMessages as { json?: unknown }).json === 'string'
+   ) {
+     delete (window as unknown as Record<string, unknown>).__pendingUpdateMessages;
+-    const payload = pendingMessages as { json: string; sequence?: number | null };
+-    window.updateMessages(payload.json, payload.sequence ?? undefined);
++    const payload = pendingMessages as {
++      json: string;
++      sequence?: number | null;
++      firstUserPrompt?: string;
++    };
++    window.updateMessages(
++      payload.json,
++      payload.sequence ?? undefined,
++      payload.firstUserPrompt,
++    );
+   }
+ 
+   window.updateStatus = (text) => {
+@@ -598,6 +774,13 @@ export function registerMessageCallbacks(
      addToast(text);
    };
  
@@ -6804,7 +7299,7 @@ index c7561d08..87bfa5aa 100644
    window.showLoading = (value) => {
      const isLoading = isTruthy(value);
  
-@@ -606,6 +769,10 @@ export function registerMessageCallbacks(
+@@ -606,6 +789,10 @@ export function registerMessageCallbacks(
        return;
      }
  
@@ -6815,7 +7310,7 @@ index c7561d08..87bfa5aa 100644
      // Notify backend about loading state change for tab indicator
      sendBridgeEvent('tab_loading_changed', JSON.stringify({ loading: isLoading }));
  
-@@ -743,10 +910,12 @@ export function registerMessageCallbacks(
+@@ -743,10 +930,13 @@ export function registerMessageCallbacks(
      pendingCodexHistoryPages.clear();
      window.__prependedHistoryMessageCount = 0;
      window.__messageBaseIndex = 0;
@@ -6825,10 +7320,19 @@ index c7561d08..87bfa5aa 100644
      window.__historySurfaceRefreshEpoch = (window.__historySurfaceRefreshEpoch ?? 0) + 1;
      resetTransientUiState();
 +    setRetryState(null);
++    setFirstUserPrompt(null);
      closeContextUsageDialog();
      setMessages([]);
    };
-@@ -874,6 +1043,10 @@ export function registerMessageCallbacks(
+@@ -858,6 +1048,7 @@ export function registerMessageCallbacks(
+         failCodexHistoryPage(info.pageId, 'Codex history changed while loading; please retry');
+         return;
+       }
++      acceptFirstUserPrompt(info.firstUserPrompt);
+ 
+       clearTimeout(pending.timeoutId);
+       pendingCodexHistoryPages.delete(info.pageId);
+@@ -874,6 +1065,10 @@ export function registerMessageCallbacks(
        window.__prependedHistoryMessageCount = pending.mode === 'replace'
          ? 0
          : prependedCount + pageMessages.length;
@@ -7062,6 +7566,31 @@ index 7292a409..e34b8cea 100644
      "minutesAndSeconds": "{{minutes}} 分 {{seconds}} 秒",
      "imagePreview": "预览",
      "context": "上下文",
+diff --git a/webview/src/main.tsx b/webview/src/main.tsx
+index 1134f92e..8548f0fd 100644
+--- a/webview/src/main.tsx
++++ b/webview/src/main.tsx
+@@ -506,7 +506,11 @@ if (window.__pendingLanguageConfig) {
+ // Pre-register updateMessages to handle backend message snapshots that arrive before React initializes
+ if (typeof window !== 'undefined' && !window.updateMessages) {
+   debugLog('[Main] Pre-registering updateMessages placeholder');
+-  window.updateMessages = (json: string, sequence?: string | number) => {
++  window.updateMessages = (
++    json: string,
++    sequence?: string | number,
++    firstUserPrompt?: string,
++  ) => {
+     const parsedSequence =
+       typeof sequence === 'number'
+         ? sequence
+@@ -516,6 +520,7 @@ if (typeof window !== 'undefined' && !window.updateMessages) {
+     window.__pendingUpdateMessages = {
+       json,
+       sequence: Number.isFinite(parsedSequence) ? parsedSequence : null,
++      firstUserPrompt,
+     };
+   };
+ }
 diff --git a/webview/src/styles/less/components/loading.less b/webview/src/styles/less/components/loading.less
 index 8e4caaba..33f11489 100644
 --- a/webview/src/styles/less/components/loading.less
@@ -7094,3 +7623,23 @@ index 8e4caaba..33f11489 100644
  .waiting-spinner {
      display: inline-block;
      position: relative;
+diff --git a/webview/src/types/index.ts b/webview/src/types/index.ts
+index cf517242..d3d8f1b5 100644
+--- a/webview/src/types/index.ts
++++ b/webview/src/types/index.ts
+@@ -104,6 +104,7 @@ export interface CodexHistoryPageInfo {
+   hasMore: boolean;
+   loadedMessageCount: number;
+   cursorReset?: boolean;
++  firstUserPrompt?: string;
+ }
+ 
+ export interface TodoItem {
+@@ -128,6 +129,7 @@ export interface HistorySessionSummary {
+   agent?: string;
+   fileSize?: number;
+   entrypoint?: string; // Session entrypoint: 'cli', 'sdk-cli', 'claude-vscode', etc.
++  hasCustomTitle?: boolean;
+ }
+ 
+ export interface HistoryData {
