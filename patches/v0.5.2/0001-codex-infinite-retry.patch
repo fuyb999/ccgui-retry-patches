@@ -5659,6 +5659,82 @@ index 9bf73aba..5482123b 100644
      currentSessionId, currentSessionIdRef,
      getMessageText, getContentBlocks,
    });
+diff --git a/webview/src/components/ChatHeader/ChatHeader.test.tsx b/webview/src/components/ChatHeader/ChatHeader.test.tsx
+new file mode 100644
+index 00000000..c26e7b8c
+--- /dev/null
++++ b/webview/src/components/ChatHeader/ChatHeader.test.tsx
+@@ -0,0 +1,40 @@
++import { fireEvent, render, screen } from '@testing-library/react';
++import type { TFunction } from 'i18next';
++import { describe, expect, it, vi } from 'vitest';
++
++import { ChatHeader } from './ChatHeader';
++
++describe('ChatHeader', () => {
++  it('shows, edits, and saves the complete session title', () => {
++    const fullTitle =
++      'A complete session title that is intentionally longer than fifty characters';
++    const replacement = `${fullTitle} with additional complete text`;
++    const onTitleChange = vi.fn();
++    const t = ((key: string) => key) as TFunction;
++
++    render(<ChatHeader
++      currentView="chat"
++      sessionTitle={fullTitle}
++      t={t}
++      onBack={vi.fn()}
++      onNewSession={vi.fn()}
++      onNewTab={vi.fn()}
++      onHistory={vi.fn()}
++      onSettings={vi.fn()}
++      onTitleChange={onTitleChange}
++      titleEditable
++    />);
++
++    expect(screen.getByText(fullTitle).getAttribute('title')).toBe(fullTitle);
++    fireEvent.click(screen.getByRole('button', { name: 'Edit session title' }));
++    expect((screen.getByRole('textbox', { name: 'Session title' }) as HTMLInputElement).value)
++      .toBe(fullTitle);
++
++    fireEvent.change(screen.getByRole('textbox', { name: 'Session title' }), {
++      target: { value: replacement },
++    });
++    fireEvent.click(screen.getByRole('button', { name: 'Save title' }));
++
++    expect(onTitleChange).toHaveBeenCalledWith(replacement);
++  });
++});
+diff --git a/webview/src/components/ChatHeader/ChatHeader.tsx b/webview/src/components/ChatHeader/ChatHeader.tsx
+index b63247c6..d4c57aa6 100644
+--- a/webview/src/components/ChatHeader/ChatHeader.tsx
++++ b/webview/src/components/ChatHeader/ChatHeader.tsx
+@@ -59,7 +59,7 @@ export function ChatHeader({
+ 
+   const commitEdit = useCallback(() => {
+     setEditing(false);
+-    const trimmed = editValue.trim().slice(0, 50);
++    const trimmed = editValue.trim();
+     if (trimmed && trimmed !== sessionTitle && onTitleChange) {
+       onTitleChange(trimmed);
+     }
+@@ -109,7 +109,6 @@ export function ChatHeader({
+               onChange={(e) => setEditValue(e.target.value)}
+               onKeyDown={handleKeyDown}
+               onBlur={handleBlur}
+-              maxLength={50}
+               spellCheck={false}
+               aria-label="Session title"
+             />
+@@ -122,7 +121,7 @@ export function ChatHeader({
+           </div>
+         ) : (
+           <div className="session-title-wrapper">
+-            <div className="session-title">
++            <div className="session-title" title={sessionTitle}>
+               {sessionTitle}
+             </div>
+             {titleEditable && (
 diff --git a/webview/src/components/ChatScreen.tsx b/webview/src/components/ChatScreen.tsx
 index 1723b1fa..5b8c418e 100644
 --- a/webview/src/components/ChatScreen.tsx
@@ -7591,6 +7667,19 @@ index 1134f92e..8548f0fd 100644
      };
    };
  }
+diff --git a/webview/src/styles/less/components/header.less b/webview/src/styles/less/components/header.less
+index 143ed743..a61cafaf 100644
+--- a/webview/src/styles/less/components/header.less
++++ b/webview/src/styles/less/components/header.less
+@@ -115,6 +115,8 @@
+ }
+ 
+ .session-title {
++    flex: 1;
++    min-width: 0;
+     font-weight: 600;
+     font-size: 14px;
+     padding-left: 8px;
 diff --git a/webview/src/styles/less/components/loading.less b/webview/src/styles/less/components/loading.less
 index 8e4caaba..33f11489 100644
 --- a/webview/src/styles/less/components/loading.less
