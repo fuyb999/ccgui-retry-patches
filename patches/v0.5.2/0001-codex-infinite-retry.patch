@@ -3974,10 +3974,18 @@ index e04aca1c..9a52d2ed 100644
       */
      public String getMinRequiredVersion() {
 diff --git a/src/main/java/com/github/claudecodegui/handler/history/HistoryMessageInjector.java b/src/main/java/com/github/claudecodegui/handler/history/HistoryMessageInjector.java
-index fee7101e..cecf2ec2 100644
+index fee7101e..b4d9597d 100644
 --- a/src/main/java/com/github/claudecodegui/handler/history/HistoryMessageInjector.java
 +++ b/src/main/java/com/github/claudecodegui/handler/history/HistoryMessageInjector.java
-@@ -27,6 +27,7 @@ import java.util.Base64;
+@@ -6,6 +6,7 @@ import com.github.claudecodegui.handler.SettingsHandler;
+ import com.github.claudecodegui.handler.UsagePushService;
+ import com.github.claudecodegui.handler.core.HandlerContext;
+ import com.github.claudecodegui.provider.codex.CodexHistoryReader;
++import com.github.claudecodegui.session.CanonicalSessionTitleExtractor;
+ import com.github.claudecodegui.session.ClaudeSession;
+ import com.github.claudecodegui.session.SessionState;
+ import com.github.claudecodegui.util.JsUtils;
+@@ -27,6 +28,7 @@ import java.util.Base64;
  import java.util.Deque;
  import java.util.HashMap;
  import java.util.HashSet;
@@ -3985,7 +3993,51 @@ index fee7101e..cecf2ec2 100644
  import java.util.List;
  import java.util.Map;
  import java.util.Set;
-@@ -472,6 +473,169 @@ public class HistoryMessageInjector {
+@@ -233,9 +235,15 @@ public class HistoryMessageInjector {
+             throw new IllegalArgumentException("Codex history page size must be positive");
+         }
+ 
+-        CodexTurnPageCollector turnCollector = new CodexTurnPageCollector(beforeTurn, pageSize);
+-        CodexFrontendMessageAccumulator accumulator = new CodexFrontendMessageAccumulator(turnCollector::accept);
+         CodexHistoryPage page = new CodexHistoryPage();
++        CodexTurnPageCollector turnCollector = new CodexTurnPageCollector(beforeTurn, pageSize);
++        Consumer<JsonObject> pageConsumer = message -> {
++            if (page.firstUserPrompt == null) {
++                page.firstUserPrompt = CanonicalSessionTitleExtractor.fromFrontendMessage(message);
++            }
++            turnCollector.accept(message);
++        };
++        CodexFrontendMessageAccumulator accumulator = new CodexFrontendMessageAccumulator(pageConsumer);
+         page.rawRecordCount = reader.forEachSessionMessage(sessionId, rawMessage -> {
+             extractSessionMeta(rawMessage, page);
+             accumulator.accept(rawMessage);
+@@ -254,9 +262,15 @@ public class HistoryMessageInjector {
+     static CodexHistoryPage paginateCodexMessages(JsonArray messages,
+                                                    Integer beforeTurn,
+                                                    int pageSize) {
+-        CodexTurnPageCollector turnCollector = new CodexTurnPageCollector(beforeTurn, pageSize);
+-        CodexFrontendMessageAccumulator accumulator = new CodexFrontendMessageAccumulator(turnCollector::accept);
+         CodexHistoryPage page = new CodexHistoryPage();
++        CodexTurnPageCollector turnCollector = new CodexTurnPageCollector(beforeTurn, pageSize);
++        Consumer<JsonObject> pageConsumer = message -> {
++            if (page.firstUserPrompt == null) {
++                page.firstUserPrompt = CanonicalSessionTitleExtractor.fromFrontendMessage(message);
++            }
++            turnCollector.accept(message);
++        };
++        CodexFrontendMessageAccumulator accumulator = new CodexFrontendMessageAccumulator(pageConsumer);
+         page.rawRecordCount = messages.size();
+         for (JsonElement element : messages) {
+             JsonObject rawMessage = element.getAsJsonObject();
+@@ -291,6 +305,7 @@ public class HistoryMessageInjector {
+         boolean cursorReset;
+         String threadId;
+         String cwd;
++        String firstUserPrompt;
+     }
+ 
+     private static final class IndexedTurn {
+@@ -472,6 +487,169 @@ public class HistoryMessageInjector {
          return frontendMessages;
      }
  
@@ -4155,6 +4207,16 @@ index fee7101e..cecf2ec2 100644
      /**
       * Extracts a provider-reported Codex context snapshot from a JSONL token_count record.
       * Only last_token_usage represents the active model context. Session-cumulative
+@@ -1066,6 +1244,9 @@ public class HistoryMessageInjector {
+         pageInfo.addProperty("hasMore", page.fromTurn > 0);
+         pageInfo.addProperty("loadedMessageCount", page.messages.size());
+         pageInfo.addProperty("cursorReset", page.cursorReset);
++        if (page.firstUserPrompt != null && !page.firstUserPrompt.isBlank()) {
++            pageInfo.addProperty("firstUserPrompt", page.firstUserPrompt);
++        }
+         context.callJavaScript("completeCodexHistoryPage", context.escapeJs(gson.toJson(pageInfo)));
+ 
+         LOG.info("[HistoryHandler] Injected Codex history page in " + batchCount
 diff --git a/src/main/java/com/github/claudecodegui/provider/codex/CodexSDKBridge.java b/src/main/java/com/github/claudecodegui/provider/codex/CodexSDKBridge.java
 index 87afb53d..34d51689 100644
 --- a/src/main/java/com/github/claudecodegui/provider/codex/CodexSDKBridge.java
@@ -4910,6 +4972,41 @@ index fa95e913..faa5ab3f 100644
 +        assertEquals(List.of("0.148.0"), SdkDefinition.CODEX_SDK.getFallbackVersions());
      }
  }
+diff --git a/src/test/java/com/github/claudecodegui/handler/history/HistoryMessageInjectorTest.java b/src/test/java/com/github/claudecodegui/handler/history/HistoryMessageInjectorTest.java
+index 50272eb1..c149cf83 100644
+--- a/src/test/java/com/github/claudecodegui/handler/history/HistoryMessageInjectorTest.java
++++ b/src/test/java/com/github/claudecodegui/handler/history/HistoryMessageInjectorTest.java
+@@ -482,6 +482,30 @@ public class HistoryMessageInjectorTest {
+         assertEquals("assistant-4", first.messages.get(first.messages.size() - 1).get("content").getAsString());
+     }
+ 
++    @Test
++    public void latestCodexHistoryPageRetainsTheOriginalFirstPrompt() {
++        JsonArray messages = new JsonArray();
++        messages.add(responseItemCustomToolOutput(
++                "2026-08-20T00:00:00.000Z", "tool-call-before-user", "internal tool output"));
++        messages.add(responseItemDeveloperMessage(
++                "2026-08-20T00:00:01.000Z", "internal developer instruction"));
++        for (int turn = 0; turn < 40; turn++) {
++            messages.add(eventUserMessage(
++                    String.format("2026-08-20T00:00:%02d.000Z", turn % 60),
++                    turn == 0 ? "original first question" : "later question " + turn));
++            messages.add(responseItemAssistantMessage(
++                    String.format("2026-08-20T00:01:%02d.000Z", turn % 60),
++                    "answer " + turn));
++        }
++
++        HistoryMessageInjector.CodexHistoryPage page =
++                HistoryMessageInjector.paginateCodexMessages(messages, null, 30);
++
++        assertEquals(10, page.fromTurn);
++        assertEquals("original first question", page.firstUserPrompt);
++        assertEquals("later question 10", page.messages.get(0).get("content").getAsString());
++    }
++
+     @Test
+     public void resetsToLatestPageWhenCodexHistoryCursorExceedsCurrentFile() {
+         HistoryMessageInjector.CodexHistoryPage page =
 diff --git a/src/test/java/com/github/claudecodegui/provider/codex/CodexSDKBridgeHistoryTest.java b/src/test/java/com/github/claudecodegui/provider/codex/CodexSDKBridgeHistoryTest.java
 index 4149893b..d1a29786 100644
 --- a/src/test/java/com/github/claudecodegui/provider/codex/CodexSDKBridgeHistoryTest.java
