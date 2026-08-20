@@ -4697,7 +4697,7 @@ index 3af159f3..4fabea6f 100644
      }
  
 diff --git a/src/main/java/com/github/claudecodegui/session/StreamMessageCoalescer.java b/src/main/java/com/github/claudecodegui/session/StreamMessageCoalescer.java
-index 37059022..7da18995 100644
+index 37059022..3b646a24 100644
 --- a/src/main/java/com/github/claudecodegui/session/StreamMessageCoalescer.java
 +++ b/src/main/java/com/github/claudecodegui/session/StreamMessageCoalescer.java
 @@ -100,7 +100,10 @@ public class StreamMessageCoalescer {
@@ -4746,67 +4746,63 @@ index 37059022..7da18995 100644
                              + ", buildMs=" + payloadBuildMs
                              + ", sequence=" + sequence);
                  } else if (LOG.isDebugEnabled()) {
-@@ -412,13 +429,52 @@ public class StreamMessageCoalescer {
+@@ -411,15 +428,13 @@ public class StreamMessageCoalescer {
+                 // prevent afterSendOnEdt from running.  When afterSendOnEdt carries
                  // the onStreamEnd signal, failing to run it permanently freezes the UI.
                  try {
-                     if (tailUpdate) {
+-                    if (tailUpdate) {
 -                        callbackTarget.callJavaScript(
 -                                "updateMessageTail",
 -                                escapedMessagesJson,
 -                                String.valueOf(tailBaseIndex),
 -                                String.valueOf(pushSequence));
-+                        if (escapedAssistantAnchorJson != null) {
-+                            if (escapedFirstUserPrompt != null) {
-+                                callbackTarget.callJavaScript(
-+                                        "updateMessageTail",
-+                                        escapedMessagesJson,
-+                                        String.valueOf(tailBaseIndex),
-+                                        String.valueOf(pushSequence),
-+                                        escapedAssistantAnchorJson,
-+                                        String.valueOf(transport.anchorIndex()),
-+                                        escapedFirstUserPrompt);
-+                            } else {
-+                                callbackTarget.callJavaScript(
-+                                        "updateMessageTail",
-+                                        escapedMessagesJson,
-+                                        String.valueOf(tailBaseIndex),
-+                                        String.valueOf(pushSequence),
-+                                        escapedAssistantAnchorJson,
-+                                        String.valueOf(transport.anchorIndex()));
-+                            }
-+                        } else if (escapedFirstUserPrompt != null) {
-+                            callbackTarget.callJavaScript(
-+                                    "updateMessageTail",
-+                                    escapedMessagesJson,
-+                                    String.valueOf(tailBaseIndex),
-+                                    String.valueOf(pushSequence),
-+                                    "",
-+                                    "",
-+                                    escapedFirstUserPrompt);
-+                        } else {
-+                            callbackTarget.callJavaScript(
-+                                    "updateMessageTail",
-+                                    escapedMessagesJson,
-+                                    String.valueOf(tailBaseIndex),
-+                                    String.valueOf(pushSequence));
-+                        }
-                     } else {
+-                    } else {
 -                        callbackTarget.callJavaScript("updateMessages", escapedMessagesJson, String.valueOf(pushSequence));
-+                        if (escapedFirstUserPrompt != null) {
-+                            callbackTarget.callJavaScript(
-+                                    "updateMessages",
-+                                    escapedMessagesJson,
-+                                    String.valueOf(pushSequence),
-+                                    escapedFirstUserPrompt);
-+                        } else {
-+                            callbackTarget.callJavaScript(
-+                                    "updateMessages", escapedMessagesJson, String.valueOf(pushSequence));
-+                        }
-                     }
+-                    }
++                    dispatchMessageUpdate(
++                            callbackTarget,
++                            transport,
++                            escapedMessagesJson,
++                            pushSequence,
++                            escapedAssistantAnchorJson,
++                            escapedFirstUserPrompt);
                      synchronized (lock) {
                          // Unconditional: this frame reached the webview, so it becomes the
-@@ -449,17 +505,39 @@ public class StreamMessageCoalescer {
+                         // prefix baseline for tail transport. Gating this on
+@@ -447,19 +462,71 @@ public class StreamMessageCoalescer {
+         });
+     }
  
++    static void dispatchMessageUpdate(
++            JsCallbackTarget callbackTarget,
++            MessageTransport transport,
++            String escapedMessagesJson,
++            long pushSequence,
++            String escapedAssistantAnchorJson,
++            String escapedFirstUserPrompt
++    ) {
++        String prompt = escapedFirstUserPrompt != null ? escapedFirstUserPrompt : "";
++        if (transport.tailUpdate()) {
++            String anchor = escapedAssistantAnchorJson != null ? escapedAssistantAnchorJson : "";
++            String anchorIndex = escapedAssistantAnchorJson != null
++                    ? String.valueOf(transport.anchorIndex()) : "";
++            callbackTarget.callJavaScript(
++                    "updateMessageTail",
++                    escapedMessagesJson,
++                    String.valueOf(transport.baseIndex()),
++                    String.valueOf(pushSequence),
++                    anchor,
++                    anchorIndex,
++                    prompt);
++            return;
++        }
++        callbackTarget.callJavaScript(
++                "updateMessages",
++                escapedMessagesJson,
++                String.valueOf(pushSequence),
++                prompt);
++    }
++
      static MessageTransport selectMessageTransport(List<ClaudeSession.Message> messages,
                                                      List<ClaudeSession.Message> previousMessages) {
 +        String firstUserPrompt = CanonicalSessionTitleExtractor.fromMessages(messages);
@@ -5305,7 +5301,7 @@ index 1304649e..7392b1aa 100644
      public void normalizeUsageValueRejectsNegativeValues() {
          assertEquals(0, SessionCallbackAdapter.normalizeUsageValue(-1));
 diff --git a/src/test/java/com/github/claudecodegui/session/StreamMessageCoalescerStreamEndHookTest.java b/src/test/java/com/github/claudecodegui/session/StreamMessageCoalescerStreamEndHookTest.java
-index 11263499..5cbc0f59 100644
+index 11263499..6d06777c 100644
 --- a/src/test/java/com/github/claudecodegui/session/StreamMessageCoalescerStreamEndHookTest.java
 +++ b/src/test/java/com/github/claudecodegui/session/StreamMessageCoalescerStreamEndHookTest.java
 @@ -10,6 +10,7 @@ import java.util.concurrent.atomic.AtomicInteger;
@@ -5316,7 +5312,31 @@ index 11263499..5cbc0f59 100644
  import static org.junit.Assert.assertTrue;
  
  /**
-@@ -89,15 +90,35 @@ public class StreamMessageCoalescerStreamEndHookTest {
+@@ -34,6 +35,23 @@ public class StreamMessageCoalescerStreamEndHookTest {
+         @Override public void onStreamEnded() { streamEndedCount.incrementAndGet(); }
+     }
+ 
++    private static final class RecordingTarget implements StreamMessageCoalescer.JsCallbackTarget {
++        String functionName;
++        String[] args;
++
++        @Override
++        public void callJavaScript(String functionName, String... args) {
++            if ("updateMessages".equals(functionName) || "updateMessageTail".equals(functionName)) {
++                this.functionName = functionName;
++                this.args = args;
++            }
++        }
++
++        @Override public JBCefBrowser getBrowser() { return null; }
++        @Override public boolean isDisposed() { return false; }
++        @Override public HandlerContext getHandlerContext() { return null; }
++    }
++
+     @Test
+     public void onStreamEndFiresHookAndClearsActive() {
+         CountingTarget target = new CountingTarget();
+@@ -89,15 +107,63 @@ public class StreamMessageCoalescerStreamEndHookTest {
      }
  
      @Test
@@ -5353,10 +5373,38 @@ index 11263499..5cbc0f59 100644
 +        assertTrue(transport.tailUpdate());
 +        assertEquals(100, transport.anchorIndex());
 +        assertEquals(assistant, transport.anchorMessage());
++    }
++
++    @Test
++    public void fullCallbackKeepsTheOptionalPromptSlotWhenNoPromptExists() {
++        RecordingTarget target = new RecordingTarget();
++        StreamMessageCoalescer.MessageTransport transport = new StreamMessageCoalescer.MessageTransport(
++                List.of(), 0, false, null, -1, null);
++
++        StreamMessageCoalescer.dispatchMessageUpdate(target, transport, "[]", 7, null, null);
++
++        assertEquals("updateMessages", target.functionName);
++        assertEquals(3, target.args.length);
++        assertEquals("", target.args[2]);
++    }
++
++    @Test
++    public void tailCallbackKeepsAnchorAndPromptSlotsWhenBothAreAbsent() {
++        RecordingTarget target = new RecordingTarget();
++        StreamMessageCoalescer.MessageTransport transport = new StreamMessageCoalescer.MessageTransport(
++                List.of(), 220, true, null, -1, null);
++
++        StreamMessageCoalescer.dispatchMessageUpdate(target, transport, "[]", 8, null, null);
++
++        assertEquals("updateMessageTail", target.functionName);
++        assertEquals(6, target.args.length);
++        assertEquals("", target.args[3]);
++        assertEquals("", target.args[4]);
++        assertEquals("", target.args[5]);
      }
  
      @Test
-@@ -155,6 +176,46 @@ public class StreamMessageCoalescerStreamEndHookTest {
+@@ -155,6 +221,46 @@ public class StreamMessageCoalescerStreamEndHookTest {
          assertEquals(rebuilt, transport.messages());
      }
  
